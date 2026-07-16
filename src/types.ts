@@ -2,6 +2,11 @@ export const PHASES = ["guard", "transform", "internal-final", "context", "obser
 export type HookPhase = (typeof PHASES)[number];
 export type HookDecision = "allow" | "deny";
 
+export interface ToolProvenance {
+  source: string;
+  path?: string;
+}
+
 export interface NormalizedEvent {
   type:
     | "input"
@@ -17,6 +22,7 @@ export interface NormalizedEvent {
   toolCallId?: string;
   input: Record<string, unknown>;
   isError?: boolean;
+  provenance?: ToolProvenance;
   payload: Record<string, unknown>;
 }
 

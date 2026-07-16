@@ -8,7 +8,9 @@ export function createPiHooksExtension(options: CreateHookHostOptions = {}) {
     const host = await createHookHost(options);
 
     pi.on("tool_call", async (event, ctx) => {
-      const result = await host.dispatch(normalizeEvent("tool_call", record(event)), ctx as DispatchContext);
+      const normalized = normalizeEvent("tool_call", record(event));
+      normalized.provenance = resolveProvenance(pi, normalized.toolName);
+      const result = await host.dispatch(normalized, ctx as DispatchContext);
       replaceInput(event.input as Record<string, unknown>, result.input);
       if (result.decision === "deny") return { block: true, reason: result.reason };
     });
@@ -46,6 +48,12 @@ export function createPiHooksExtension(options: CreateHookHostOptions = {}) {
       },
     });
   };
+}
+
+function resolveProvenance(pi: ExtensionAPI, toolName: string | undefined): { source: string; path?: string } | undefined {
+  if (!toolName) return undefined;
+  const active = pi.getAllTools().find((tool) => tool.name === toolName);
+  return active ? { source: active.sourceInfo.source, path: active.sourceInfo.path } : undefined;
 }
 
 function replaceInput(target: Record<string, unknown>, replacement: Record<string, unknown>): void {

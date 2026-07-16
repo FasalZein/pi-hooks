@@ -40,6 +40,7 @@ function fakePi() {
         commands.set(name, command);
       },
       registerTool() { registrations.push("tool"); },
+      getAllTools() { return []; },
     },
     handlers,
     commands,
@@ -247,9 +248,11 @@ describe("configuration, safe mode, audit, and status", () => {
 
     const bad = await fixture(`{ "schemaVersion": 2, "modules": [] }`);
     const host = await createHookHost({ configPath: bad.configPath, modules: [] });
+    // Provenance-less detached dispatch fails closed for safe-mode reads (SLICE-0008):
+    // only the real adapter path can attest trusted built-in provenance.
     const read = await host.dispatch(normalizeEvent("tool_call", { toolName: "read", toolCallId: "r", input: { path: "x" } }), ctx as never);
     const write = await host.dispatch(normalizeEvent("tool_call", { toolName: "write", toolCallId: "w", input: { path: "x", content: "secret" } }), ctx as never);
-    expect(read.decision).toBe("allow");
+    expect(read).toMatchObject({ decision: "deny", reason: expect.stringContaining("Read-Only Safe Mode") });
     expect(write).toMatchObject({ decision: "deny", reason: expect.stringContaining("Read-Only Safe Mode") });
     expect(host.status()).toMatchObject({ mode: "read-only-safe", configHealth: "invalid" });
   });

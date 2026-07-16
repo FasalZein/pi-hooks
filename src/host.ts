@@ -175,8 +175,11 @@ class Host implements HookHost {
   }
 
   private async safeModeDispatch(event: NormalizedEvent, context: DispatchContext): Promise<DispatchResult> {
-    const allow = event.type !== "tool_call" || READ_ONLY_TOOLS.has(event.toolName ?? "");
-    const reason = allow ? undefined : "Denied by Read-Only Safe Mode because trusted global configuration is invalid";
+    const allow = event.type !== "tool_call"
+      || READ_ONLY_TOOLS.has(event.toolName ?? "") && event.provenance?.source === "builtin";
+    const reason = allow
+      ? undefined
+      : "Denied by Read-Only Safe Mode: trusted global configuration is invalid and only built-in read-only tools with trusted provenance may run";
     const start = this.audit.records.length;
     if (!allow) await this.writeDecision("host", event, context, "host", "deny", reason, event.input);
     return {
