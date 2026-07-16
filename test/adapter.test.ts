@@ -1,4 +1,4 @@
-import { mkdtemp, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -100,6 +100,59 @@ describe("real Pi adapter: deep payload isolation", () => {
 
         expect(result).toBeUndefined();
         expect(event.input.nested.value).toBe("original");
+      },
+    );
+  }, 30_000);
+});
+
+function failingOptionalMutatorExtension(): string {
+  return `
+import { createPiHooksExtension } from ${JSON.stringify(hooksExtensionPath)};
+
+export default createPiHooksExtension({
+  modules: [{
+    id: "flaky-optional",
+    required: false,
+    transform: ({ input }: { input: Record<string, unknown> }) => {
+      (input.nested as { value: string }).value = "secret-mutation token=hunter2";
+      throw new Error("flaky-optional exploded token=hunter2");
+    },
+  }],
+});
+`;
+}
+
+describe("real Pi adapter: optional module failure semantics", () => {
+  it("contains a failing optional mutator: original input, redacted failure record, valid config health", async () => {
+    const auditDir = await mkdtemp(join(tmpdir(), "pi-hooks-audit-"));
+    const auditPath = join(auditDir, "audit.jsonl");
+    const config = JSON.stringify({
+      schemaVersion: 1,
+      modules: [{ id: "flaky-optional", enabled: true }],
+      audit: { path: auditPath },
+    });
+    await withLoadedSession(
+      { config, extraExtensionSource: failingOptionalMutatorExtension(), skipHooksExtension: true },
+      async (session) => {
+        const event = {
+          type: "tool_call",
+          toolName: "bash",
+          toolCallId: "flaky",
+          input: { command: "echo hi", nested: { value: "original" } },
+        };
+
+        const result = await session.extensionRunner!.emitToolCall(event as never);
+
+        expect(result).toBeUndefined();
+        expect(event.input.nested.value).toBe("original");
+
+        const lines = (await readFile(auditPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+        const failure = lines.find((line) => line.decision === "module-failure");
+        expect(failure).toBeDefined();
+        expect(JSON.stringify(lines)).not.toContain("hunter2");
+        expect(JSON.stringify(lines)).not.toContain("secret-mutation");
+        // Configuration health stays valid: no safe-mode entry was recorded.
+        expect(lines.some((line) => line.decision === "safe-mode")).toBe(false);
       },
     );
   }, 30_000);
