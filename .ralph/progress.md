@@ -95,3 +95,27 @@
 **Verification:** Focused post-implementation run `npx vitest run test/policy-engine.test.ts --reporter=json --outputFile=/tmp/vitest-item4-green.json` → exit 0, 12/12 passed. `npm run verify` → exit 0: tsc clean, eslint clean, vitest 94/94 (6 files, all prior 90 still green).
 
 **Next-iteration notes:** Follow `.ralph/plan.md` prioritization and `.ralph/items.json`; the ask scripted-turn helper now lives in `test/policy-engine.test.ts`.
+
+## Iteration 5 — Item 5: Hard-deny composition (functional)
+
+**Decision rationale:** First unfinished item per the authoritative plan order. It completes the four-level severity lattice and pins hard-deny as unapprovable and monotonic across provider-config rule layers.
+
+**Startup state:** Branch `main` matched the required branch. The only status entry was untracked `.ralph/loop.md`, inspected as the active harness runtime-control file and left untouched because the protocol explicitly forbids staging it; there was no crashed prior-item code or bundle diff to finish or reset.
+
+**Red evidence (direct dispatch seam):** Added three item-specific tests, then ran `npx vitest run test/policy-engine.test.ts --reporter=json --outputFile=/tmp/vitest-item5-red.json` before implementation → exit 1, 14/15 passed and 1/15 failed. The second provider-config rule-source case received `undefined` instead of `{ block: true }` (`expected undefined to match object { block: true }`) because the closed provider schema did not yet accept or compose `ruleSources`. The existing severity lattice already made the single-source hard-deny and full-lattice cases pass, so the red isolated the missing layered-source contract.
+
+**What was done:**
+- `src/policy-engine.ts`: added closed declarative `ruleSources?: [{ id, rules }]` provider config, flattened with base `rules` before global duplicate-rule-id validation and composition. Source/layer order has no authority; the existing highest-severity and lexical-id rules apply across all layers.
+- Added an explicit hard-deny branch before ask handling. It returns the hard-deny decision reason without touching the interaction broker, making the unapprovable behavior structural rather than incidental to the generic non-allow fallback.
+- `test/policy-engine.test.ts`: added direct-dispatch coverage proving hard-deny outranks allow/ask/deny with an attached accepting UI but zero confirmation calls; an allow in a second provider-config rule source cannot relax a hard-deny; and the complete allow < ask < deny < hard-deny outcome, lexical tie-break, and reason remain identical under rules-array and object-key reordering.
+
+**Assumptions (conservative, reversible):**
+- The minimal in-provider layering shape is optional `ruleSources`, each with a required attribution `id` and closed `rules` array; base `rules` remains required for compatibility with the frozen bundle contract. Project-file loading remains out of scope.
+- Rule ids are unique across base rules and every source, preserving deterministic attribution. Source ids do not participate in severity or tie-breaking.
+- Direct dispatch is sufficient because this item claims decision shape and confirmation non-invocation, not tool execution or model-visible output.
+
+**Changed files:** `src/policy-engine.ts`, `test/policy-engine.test.ts`, `.ralph/items.json`, `.ralph/progress.md`.
+
+**Verification:** Focused post-implementation run `npx vitest run test/policy-engine.test.ts --reporter=json --outputFile=/tmp/vitest-item5-green.json` → exit 0, 15/15 passed. Required gate `npm run verify` → exit 0: tsc clean, eslint clean, vitest 97/97 across 6 files; all prior tests remained green.
+
+**Next-iteration notes:** Select work only from the authoritative `.ralph/items.json` using `.ralph/plan.md` prioritization.

@@ -402,3 +402,79 @@ describe("SLICE-0011 item 4: ask severity with fail-closed unattended safety", (
     });
   }, 30_000);
 });
+
+describe("SLICE-0011 item 5: hard-deny composition", () => {
+  it("hard-deny outranks allow, ask, and deny without showing a confirmation", async () => {
+    const calls: Array<[string, string]> = [];
+    const config = policyConfig([
+      { id: "allow-bash", match: { tool: "bash" }, decision: "allow", scope: "shell", remedy: "n/a" },
+      { id: "ask-bash", match: { tool: "bash" }, decision: "ask", scope: "shell", remedy: "request approval" },
+      { id: "deny-bash", match: { tool: "bash" }, decision: "deny", scope: "shell", remedy: "use a read-only tool" },
+      { id: "hard-deny-bash", match: { tool: "bash" }, decision: "hard-deny", scope: "forbidden shell", remedy: "remove the prohibited action" },
+    ]);
+    await withPolicySession({ config, extensionSource: bundledSource }, async (session) => {
+      await session.bindExtensions({ uiContext: confirmingUiContext(calls, true) as never });
+      const result = await emitToolCall(session, "bash", { command: "echo hi" });
+      expect(result).toMatchObject({ block: true });
+      expect(result?.reason).toContain("hard-deny-bash");
+      expect(result?.reason).toContain("hard-deny");
+      expect(result?.reason).not.toContain("ask-bash");
+      expect(calls).toEqual([]);
+    });
+  }, 30_000);
+
+  it("an allow in a second provider-config rule source cannot relax a hard-deny", async () => {
+    const config = JSON.stringify({
+      schemaVersion: 2,
+      providers: [{
+        id: "policy-engine",
+        enabled: true,
+        config: {
+          rules: [
+            { id: "hard-deny-bash", match: { tool: "bash" }, decision: "hard-deny", scope: "forbidden shell", remedy: "remove the prohibited action" },
+          ],
+          ruleSources: [{
+            id: "project-layer",
+            rules: [
+              { id: "allow-bash", match: { tool: "bash" }, decision: "allow", scope: "project shell", remedy: "n/a" },
+            ],
+          }],
+        },
+      }],
+    });
+    await withPolicySession({ config, extensionSource: bundledSource }, async (session) => {
+      const result = await emitToolCall(session, "bash", { command: "echo hi" });
+      expect(result).toMatchObject({ block: true });
+      expect(result?.reason).toContain("hard-deny-bash");
+      expect(result?.reason).toContain("hard-deny");
+      expect(result?.reason).not.toContain("allow-bash");
+    });
+  }, 30_000);
+
+  it("the full lattice outcome is deterministic under rule and object-key reordering", async () => {
+    const configA = policyConfig([
+      { id: "allow-bash", match: { tool: "bash" }, decision: "allow", scope: "shell", remedy: "n/a" },
+      { id: "ask-bash", match: { tool: "bash" }, decision: "ask", scope: "shell", remedy: "request approval" },
+      { id: "deny-bash", match: { tool: "bash" }, decision: "deny", scope: "shell", remedy: "use a read-only tool" },
+      { id: "zz-hard-deny", match: { tool: "bash", input: { command: { equals: "echo hi" } } }, decision: "hard-deny", scope: "forbidden shell", remedy: "remove the prohibited action" },
+      { id: "aa-hard-deny", match: { input: { command: { equals: "echo hi" } }, tool: "bash" }, decision: "hard-deny", scope: "forbidden shell", remedy: "remove the prohibited action" },
+    ]);
+    const configB = policyConfig([
+      { remedy: "remove the prohibited action", decision: "hard-deny", match: { tool: "bash", input: { command: { equals: "echo hi" } } }, scope: "forbidden shell", id: "aa-hard-deny" },
+      { match: { input: { command: { equals: "echo hi" } }, tool: "bash" }, id: "zz-hard-deny", remedy: "remove the prohibited action", scope: "forbidden shell", decision: "hard-deny" },
+      { remedy: "use a read-only tool", scope: "shell", decision: "deny", match: { tool: "bash" }, id: "deny-bash" },
+      { decision: "ask", remedy: "request approval", id: "ask-bash", scope: "shell", match: { tool: "bash" } },
+      { scope: "shell", id: "allow-bash", remedy: "n/a", match: { tool: "bash" }, decision: "allow" },
+    ]);
+
+    const resultA = await withPolicySession({ config: configA, extensionSource: bundledSource }, async (session) =>
+      emitToolCall(session, "bash", { command: "echo hi" }));
+    const resultB = await withPolicySession({ config: configB, extensionSource: bundledSource }, async (session) =>
+      emitToolCall(session, "bash", { command: "echo hi" }));
+
+    expect(resultA).toMatchObject({ block: true });
+    expect(resultA?.reason).toContain("aa-hard-deny");
+    expect(resultA?.reason).toContain("hard-deny");
+    expect(resultB).toEqual(resultA);
+  }, 60_000);
+});

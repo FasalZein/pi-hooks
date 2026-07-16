@@ -47,8 +47,15 @@ const PolicyRule = Type.Object({
   remedy: Type.String({ minLength: 1 }),
 }, { additionalProperties: false });
 
+const RuleSource = Type.Object({
+  id: Type.String({ minLength: 1 }),
+  rules: Type.Array(PolicyRule),
+}, { additionalProperties: false });
+
 export const PolicyEngineConfigSchema = Type.Object({
   rules: Type.Array(PolicyRule),
+  /** Additional declarative layers composed with the provider's base rules. */
+  ruleSources: Type.Optional(Type.Array(RuleSource)),
 }, { additionalProperties: false });
 
 export type PolicyRuleConfig = Static<typeof PolicyRule>;
@@ -81,12 +88,16 @@ export const policyEngineProvider = defineProvider({
 
 /** Rule ids carry attribution; duplicates would make the tie-break ambiguous. */
 function prepareRules(config: PolicyEngineConfig): readonly PolicyRuleConfig[] {
+  const rules = [
+    ...config.rules,
+    ...(config.ruleSources ?? []).flatMap((source) => source.rules),
+  ];
   const seen = new Set<string>();
-  for (const rule of config.rules) {
+  for (const rule of rules) {
     if (seen.has(rule.id)) throw new Error(`duplicate policy rule id: ${rule.id}`);
     seen.add(rule.id);
   }
-  return config.rules;
+  return rules;
 }
 
 async function decide(
@@ -97,6 +108,13 @@ async function decide(
   const winner = composeDecision(rules, invocation);
   if (!winner || winner.decision === "allow") return undefined;
   const toolName = invocation.event.toolName ?? "(unnamed)";
+  if (winner.decision === "hard-deny") {
+    // Hard-denies are unapprovable: never consult the interaction broker.
+    return {
+      decision: "deny",
+      reason: `Policy Engine rule "${winner.id}" (severity: hard-deny) denies tool "${toolName}"`,
+    };
+  }
   if (winner.decision === "ask") {
     // Two-phase approval, phase one: ask exactly once for the exact elevated
     // action. Unattended sessions fail closed — no UI means denied immediately.
@@ -113,8 +131,7 @@ async function decide(
       reason: `Policy Engine rule "${winner.id}" (severity: ask) denies tool "${toolName}": approval was not granted`,
     };
   }
-  // Fail-closed: any remaining non-allow severity blocks at this observed
-  // boundary. The hard-deny short-circuit refines this in later work.
+  // A plain deny blocks at this observed boundary.
   return {
     decision: "deny",
     reason: `Policy Engine rule "${winner.id}" (severity: ${winner.decision}) denies tool "${toolName}"`,

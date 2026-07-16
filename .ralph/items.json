@@ -68,7 +68,7 @@
         "Add a full-lattice determinism case now that all four severities exist: decision, winning rule id, and reason identical under rules-array and object-key reordering",
         "Run red, record evidence in .ralph/progress.md, implement the hard-deny short-circuit, run npm run verify green"
       ],
-      "passes": false,
+      "passes": true,
       "regression_notes": ""
     },
     {
