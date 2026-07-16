@@ -150,9 +150,11 @@ export interface AuditRecord {
   timestamp: string;
   sessionId?: string;
   moduleId: string;
+  /** Provider/engine attribution: which capability produced this record. */
+  provider?: string;
   eventType: NormalizedEvent["type"];
   phase: HookPhase | "host";
-  decision: "allow" | "deny" | "mutate" | "module-failure" | "safe-mode";
+  decision: "allow" | "deny" | "mutate" | "module-failure" | "safe-mode" | "grant-refused";
   reason?: string;
   inputSummary?: unknown;
 }

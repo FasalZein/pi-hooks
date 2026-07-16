@@ -46,6 +46,7 @@ function minimize(record: AuditRecord): AuditRecord {
     timestamp: record.timestamp,
     ...(record.sessionId ? { sessionId: hash(record.sessionId) } : {}),
     moduleId: sanitizeText(record.moduleId, 64),
+    ...(record.provider ? { provider: sanitizeText(record.provider, 64) } : {}),
     eventType: record.eventType,
     phase: record.phase,
     decision: record.decision,

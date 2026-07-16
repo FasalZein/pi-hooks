@@ -11,6 +11,7 @@ import type { DispatchContext } from "./types.js";
 export function createPiHooksExtension(options: CreateHookHostOptions = {}) {
   return async function piHooksExtension(pi: ExtensionAPI): Promise<void> {
     const host = await createHookHost(options);
+    host.bindPi({ registerTool: (tool) => pi.registerTool(tool as never) });
 
     pi.on("input", async (event, ctx) => {
       const result = await host.dispatch(normalizeEvent("input", record(event)), ctx as DispatchContext);

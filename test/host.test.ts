@@ -179,7 +179,7 @@ describe("Hook Host dispatch and Pi adapter", () => {
     }
 
     // Invalid config: schema error enumeration (typebox/value) drives Read-Only Safe Mode.
-    const safeMode = await loadSession(JSON.stringify({ schemaVersion: 2, modules: [] }));
+    const safeMode = await loadSession(JSON.stringify({ schemaVersion: 3, modules: [] }));
     try {
       const denied = await safeMode.extensionRunner!.emitToolCall({
         type: "tool_call",
@@ -376,7 +376,7 @@ describe("configuration, safe mode, audit, and status", () => {
     }`);
     expect((await createHookHost({ configPath: good.configPath, modules: [] })).status().mode).toBe("normal");
 
-    const bad = await fixture(`{ "schemaVersion": 2, "modules": [] }`);
+    const bad = await fixture(`{ "schemaVersion": 3, "modules": [] }`);
     const host = await createHookHost({ configPath: bad.configPath, modules: [] });
     // Provenance-less detached dispatch fails closed for safe-mode reads (SLICE-0008):
     // only the real adapter path can attest trusted built-in provenance.

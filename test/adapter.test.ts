@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 const hooksExtensionPath = fileURLToPath(new URL("../src/index.ts", import.meta.url));
 
-const invalidConfig = JSON.stringify({ schemaVersion: 2, modules: [] });
+const invalidConfig = JSON.stringify({ schemaVersion: 3, modules: [] });
 
 async function withLoadedSession<T>(
   options: { config: string; extraExtensionSource?: string; skipHooksExtension?: boolean },

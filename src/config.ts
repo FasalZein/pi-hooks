@@ -11,13 +11,25 @@ import { Value } from "typebox/value";
  * path exercised by the clean packed install test (SLICE-0008 acceptance 9).
  * schema/pi-hooks.global.schema.json is the published editor copy of this schema.
  */
+const ModuleEntry = Type.Object({
+  id: Type.String({ minLength: 1 }),
+  enabled: Type.Optional(Type.Boolean()),
+  required: Type.Optional(Type.Boolean()),
+}, { additionalProperties: false });
+
+const ProviderEntry = Type.Object({
+  id: Type.String({ minLength: 1 }),
+  enabled: Type.Optional(Type.Boolean()),
+  required: Type.Optional(Type.Boolean()),
+  config: Type.Optional(Type.Unknown()),
+}, { additionalProperties: false });
+
 const GlobalConfigSchema = Type.Object({
-  schemaVersion: Type.Literal(1),
-  modules: Type.Array(Type.Object({
-    id: Type.String({ minLength: 1 }),
-    enabled: Type.Optional(Type.Boolean()),
-    required: Type.Optional(Type.Boolean()),
-  }, { additionalProperties: false })),
+  // schemaVersion 1 is accepted and migrated to 2; any other value is rejected
+  // with a precise error (Read-Only Safe Mode on invalid global config).
+  schemaVersion: Type.Union([Type.Literal(1), Type.Literal(2)]),
+  modules: Type.Optional(Type.Array(ModuleEntry)),
+  providers: Type.Optional(Type.Array(ProviderEntry)),
   audit: Type.Optional(Type.Object({
     path: Type.Optional(Type.String({ minLength: 1 })),
     includeAllows: Type.Optional(Type.Boolean()),
@@ -26,9 +38,24 @@ const GlobalConfigSchema = Type.Object({
 
 const checkGlobalConfig = Compile(GlobalConfigSchema);
 
+export interface ModuleConfigEntry {
+  id: string;
+  enabled?: boolean;
+  required?: boolean;
+}
+
+export interface ProviderConfigEntry {
+  id: string;
+  enabled?: boolean;
+  required?: boolean;
+  config?: unknown;
+}
+
 export interface GlobalConfig {
-  schemaVersion: 1;
-  modules: Array<{ id: string; enabled?: boolean; required?: boolean }>;
+  /** Always normalized to the current schema version. */
+  schemaVersion: 2;
+  modules: ModuleConfigEntry[];
+  providers: ProviderConfigEntry[];
   audit?: { path?: string; includeAllows?: boolean };
 }
 
@@ -49,7 +76,24 @@ export async function loadGlobalConfig(path: string): Promise<GlobalConfig> {
     const errors = [...Value.Errors(GlobalConfigSchema, value)].map((error) => `${error.instancePath || "/"}: ${error.message}`);
     throw new Error(`Schema validation failed: ${errors.join("; ")}`);
   }
-  return value as GlobalConfig;
+  return migrate(value as RawGlobalConfig);
+}
+
+interface RawGlobalConfig {
+  schemaVersion: 1 | 2;
+  modules?: ModuleConfigEntry[];
+  providers?: ProviderConfigEntry[];
+  audit?: { path?: string; includeAllows?: boolean };
+}
+
+/** Migrate any accepted schema version to the current normalized shape. */
+function migrate(raw: RawGlobalConfig): GlobalConfig {
+  return {
+    schemaVersion: 2,
+    modules: raw.modules ?? [],
+    providers: raw.providers ?? [],
+    ...(raw.audit ? { audit: raw.audit } : {}),
+  };
 }
 
 function message(error: unknown): string {

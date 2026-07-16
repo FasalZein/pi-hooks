@@ -3,7 +3,14 @@ import { createPiHooksExtension } from "./adapter.js";
 export { createPiHooksExtension } from "./adapter.js";
 export { normalizeEvent } from "./events.js";
 export { createHookHost } from "./host.js";
-export type { CreateHookHostOptions, HookHost } from "./host.js";
+export type { CreateHookHostOptions, HookHost, PiGrantBindings } from "./host.js";
+export { defineProvider, GRANT_KINDS } from "./grants.js";
+export type {
+  CapabilityManifest,
+  CapabilityProvider,
+  GrantFacade,
+  GrantKind,
+} from "./grants.js";
 export type {
   AuditRecord,
   ContextDispatchResult,

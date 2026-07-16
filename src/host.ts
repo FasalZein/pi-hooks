@@ -4,6 +4,10 @@ import { AuditLog } from "./audit.js";
 import { cloneDeep, frozenView, safeFrozenView } from "./isolate.js";
 import { loadGlobalConfig, type GlobalConfig } from "./config.js";
 import { preparePolicy } from "./policy.js";
+import { resolveOrder } from "./order.js";
+import { activateProviders, type PreparedProvider, type ProviderActivation } from "./providers.js";
+import type { CapabilityProvider } from "./grants.js";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type {
   AuditRecord,
   ContextDispatchResult,
@@ -32,11 +36,19 @@ const FINAL_BOUNDARY = "Authoritative only inside this Host tool_call handler; a
 export interface CreateHookHostOptions {
   configPath?: string;
   modules?: readonly HookModule[];
+  providers?: readonly CapabilityProvider[];
+}
+
+/** Real Pi bindings supplied by the adapter to flush granted registrations. */
+export interface PiGrantBindings {
+  registerTool(tool: ToolDefinition): void;
 }
 
 export interface HookHost {
   dispatch(event: NormalizedEvent, context: DispatchContext): Promise<DispatchResult>;
   status(): HostStatus;
+  /** Flush provider grant registrations that require the real Pi surface. */
+  bindPi(bindings: PiGrantBindings): void;
 }
 
 export async function createHookHost(options: CreateHookHostOptions = {}): Promise<HookHost> {
@@ -53,14 +65,32 @@ export async function createHookHost(options: CreateHookHostOptions = {}): Promi
   } catch (error) {
     failure = message(error);
   }
+
+  let activation: ProviderActivation | undefined;
   if (config) {
+    activation = await activateProviders(options.providers ?? [], config);
     const policy = preparePolicy(available, config);
-    if (policy.ok) ({ modules, phaseOrder, required } = policy);
-    else failure = policy.failure;
+    if (policy.ok) {
+      ({ modules, phaseOrder, required } = policy);
+      if (activation.modules.length > 0) {
+        try {
+          const combined = resolveOrder([...policy.modules, ...activation.modules]);
+          modules = combined.modules;
+          phaseOrder = combined.phaseOrder;
+          for (const [id, req] of activation.requiredByModuleId) required.set(id, req);
+        } catch (error) {
+          failure = message(error);
+          modules = [];
+        }
+      }
+    } else {
+      failure = policy.failure;
+    }
   }
 
   const audit = new AuditLog(config?.audit?.path, config?.audit?.includeAllows);
-  const host = new Host(configPath, config, modules, phaseOrder, required, audit, failure);
+  if (activation) for (const record of activation.records) await audit.record(record);
+  const host = new Host(configPath, config, modules, phaseOrder, required, audit, failure, activation);
   if (failure) await host.recordSafeMode(failure);
   return host;
 }
@@ -76,6 +106,9 @@ class Host implements HookHost {
   /** Queued module context effects, drained exactly once on the next real context event. */
   private readonly queuedContext: string[] = [];
 
+  private readonly providers: PreparedProvider[];
+  private readonly pendingTools: ProviderActivation["tools"];
+
   constructor(
     private readonly configPath: string,
     private readonly config: GlobalConfig | undefined,
@@ -84,8 +117,16 @@ class Host implements HookHost {
     private readonly requiredById: Map<string, boolean>,
     private readonly audit: AuditLog,
     failure: string | undefined,
+    activation?: ProviderActivation,
   ) {
     this.configFailure = failure;
+    this.providers = activation?.providers ?? [];
+    this.pendingTools = activation?.tools ?? [];
+  }
+
+  bindPi(bindings: PiGrantBindings): void {
+    if (this.isSafeMode()) return;
+    for (const registration of this.pendingTools) bindings.registerTool(registration.tool);
   }
 
   async recordSafeMode(reason: string): Promise<void> {
