@@ -80,7 +80,7 @@
         "Run red, record evidence in .ralph/progress.md",
         "Implement the fingerprint store (compute at tool_call.guard, validate + consume over Host-final input at tool_call.internalFinal); run npm run verify green"
       ],
-      "passes": false,
+      "passes": true,
       "regression_notes": ""
     },
     {

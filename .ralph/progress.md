@@ -119,3 +119,27 @@
 **Verification:** Focused post-implementation run `npx vitest run test/policy-engine.test.ts --reporter=json --outputFile=/tmp/vitest-item5-green.json` → exit 0, 15/15 passed. Required gate `npm run verify` → exit 0: tsc clean, eslint clean, vitest 97/97 across 6 files; all prior tests remained green.
 
 **Next-iteration notes:** Select work only from the authoritative `.ralph/items.json` using `.ralph/plan.md` prioritization.
+
+## Iteration 6 — Item 6: Host-final approval fingerprints (functional)
+
+**Decision rationale:** First unfinished item per the authoritative plan order. It closes the ask path's time-of-check/time-of-use gap by binding an interactive approval to the exact observed tool name and canonical full input, then consuming that approval at `tool_call.internalFinal`.
+
+**Startup state:** Branch `main` matched the required branch. The only status entry was untracked `.ralph/loop.md`, inspected as the active harness runtime-control file and left untouched because the protocol explicitly forbids staging it; there was no crashed prior-item code or committed-bundle diff to finish or reset.
+
+**Red evidence:** Added three item-specific tests, then ran `npx vitest run test/policy-engine.test.ts --reporter=json --outputFile=/tmp/vitest-item6-red.json` before implementation → exit 1, 16/18 passed and 2/18 failed. The zero-TTL scripted turn executed the marker instead of returning an error (`expected false to be true`), and the intra-dispatch transform returned no block (`expected undefined to match object { block: true }`). The replay test already passed because the existing guard asked on every dispatch, but it now pins the required new-approval behavior with execution evidence.
+
+**What was done:**
+- `src/policy-engine.ts`: added closed `approvalTtlSeconds` provider config with a 300-second default. Approved ask calls now create a Host/session-lived pending approval keyed by `toolCallId`, carrying a SHA256 fingerprint over canonical JSON of the exact tool name and full normalized input, its expiry, and winning rule attribution.
+- Added the Policy Engine's `tool_call.internalFinal` handler. It deletes the pending approval before checking it, enforcing exact one-use; rejects expired approvals; recomputes the fingerprint over Host-final input and rejects any mismatch; and never reopens the confirmation prompt. Calls whose approval cannot be safely bound to a `toolCallId` fail closed at guard.
+- `test/policy-engine.test.ts`: scripted-turn coverage proves an accepted call executes once and an identical replay receives a second confirmation (rejected in the fixture, so execution remains at one); a zero-second configured TTL deterministically represents an approval already past expiry and prevents marker execution; direct-dispatch coverage uses a fixture transform between guard and internalFinal to prove changed input is blocked with one confirmation only. Scripted call ids are now unique across repeated turns in one session.
+
+**Assumptions (conservative, reversible):**
+- `toolCallId` is the Host-observed per-call correlation key. An approved ask without one is denied because safely associating a token across phases is impossible.
+- TTL expiry uses `Date.now() >= expiresAt`; `approvalTtlSeconds: 0` is a deterministic local substitute for waiting or fake-timer coordination through Pi's scripted turn and fully exercises the expired-before-internalFinal branch. The omitted setting uses the required 300-second default.
+- Canonical JSON preserves semantic object equality under key reordering; actual value changes invalidate the fingerprint. Approval state lives in the provider activation closure, whose lifetime is the owning Host/session.
+
+**Changed files:** `src/policy-engine.ts`, `test/policy-engine.test.ts`, `.ralph/items.json`, `.ralph/progress.md`.
+
+**Verification:** Focused post-implementation run `npx vitest run test/policy-engine.test.ts --reporter=json --outputFile=/tmp/vitest-item6-green.json` → exit 0, 18/18 passed. Required gate `npm run verify` → exit 0: tsc clean, eslint clean, vitest 100/100 across 6 files; all prior tests remained green.
+
+**Next-iteration notes:** Select work only from the authoritative `.ralph/items.json` using `.ralph/plan.md` prioritization.

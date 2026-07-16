@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Type, type Static } from "typebox";
 import { defineProvider, type InteractionGrant } from "./grants.js";
 import type { GuardResult, HookInvocation } from "./types.js";
@@ -56,6 +57,8 @@ export const PolicyEngineConfigSchema = Type.Object({
   rules: Type.Array(PolicyRule),
   /** Additional declarative layers composed with the provider's base rules. */
   ruleSources: Type.Optional(Type.Array(RuleSource)),
+  /** Interactive approval lifetime; defaults to five minutes. */
+  approvalTtlSeconds: Type.Optional(Type.Number({ minimum: 0 })),
 }, { additionalProperties: false });
 
 export type PolicyRuleConfig = Static<typeof PolicyRule>;
@@ -68,6 +71,12 @@ const SEVERITY: Record<PolicyRuleConfig["decision"], number> = {
   "hard-deny": 3,
 };
 
+interface PendingApproval {
+  fingerprint: string;
+  expiresAt: number;
+  rule: PolicyRuleConfig;
+}
+
 export const policyEngineProvider = defineProvider({
   manifest: {
     id: "policy-engine",
@@ -75,12 +84,18 @@ export const policyEngineProvider = defineProvider({
     grants: ["events", "interaction"],
     configSchema: PolicyEngineConfigSchema,
   },
-  activate(facade, config) {
-    const rules = prepareRules(config as PolicyEngineConfig);
+  activate(facade, rawConfig) {
+    const config = rawConfig as PolicyEngineConfig;
+    const rules = prepareRules(config);
+    const approvalTtlMs = (config.approvalTtlSeconds ?? 300) * 1000;
+    // Provider activation is Host-lived, so approvals survive across dispatches
+    // but never escape this Host/session. Each toolCallId owns at most one token.
+    const approvals = new Map<string, PendingApproval>();
     facade.events.registerModule({
       id: "policy-engine",
       tool_call: {
-        guard: (invocation) => decide(rules, invocation, facade.interaction),
+        guard: (invocation) => decideGuard(rules, invocation, facade.interaction, approvals, approvalTtlMs),
+        internalFinal: (invocation) => validateFinalApproval(invocation, approvals),
       },
     });
   },
@@ -100,10 +115,12 @@ function prepareRules(config: PolicyEngineConfig): readonly PolicyRuleConfig[] {
   return rules;
 }
 
-async function decide(
+async function decideGuard(
   rules: readonly PolicyRuleConfig[],
   invocation: HookInvocation,
   interaction: InteractionGrant,
+  approvals: Map<string, PendingApproval>,
+  approvalTtlMs: number,
 ): Promise<GuardResult | undefined> {
   const winner = composeDecision(rules, invocation);
   if (!winner || winner.decision === "allow") return undefined;
@@ -125,17 +142,71 @@ async function decide(
       },
       { noUiOutcome: "denied" },
     );
-    if (outcome === "approved") return undefined;
-    return {
-      decision: "deny",
-      reason: `Policy Engine rule "${winner.id}" (severity: ask) denies tool "${toolName}": approval was not granted`,
-    };
+    if (outcome !== "approved") {
+      return {
+        decision: "deny",
+        reason: askDenialReason(winner, toolName, "approval was not granted"),
+      };
+    }
+    const toolCallId = invocation.event.toolCallId;
+    if (toolCallId === undefined) {
+      return {
+        decision: "deny",
+        reason: askDenialReason(winner, toolName, "approval could not be bound to this tool call"),
+      };
+    }
+    approvals.set(toolCallId, {
+      fingerprint: toolCallFingerprint(toolName, invocation.input),
+      expiresAt: Date.now() + approvalTtlMs,
+      rule: winner,
+    });
+    return undefined;
   }
   // A plain deny blocks at this observed boundary.
   return {
     decision: "deny",
     reason: `Policy Engine rule "${winner.id}" (severity: ${winner.decision}) denies tool "${toolName}"`,
   };
+}
+
+/**
+ * Two-phase approval, phase two: consume the toolCallId-bound token exactly
+ * once and compare its SHA256 fingerprint with the Host-final observed input.
+ * A transform mismatch or expiry denies without consulting the UI again.
+ */
+function validateFinalApproval(
+  invocation: HookInvocation,
+  approvals: Map<string, PendingApproval>,
+): GuardResult | undefined {
+  const toolCallId = invocation.event.toolCallId;
+  if (toolCallId === undefined) return undefined;
+  const approval = approvals.get(toolCallId);
+  if (!approval) return undefined;
+  approvals.delete(toolCallId);
+
+  const toolName = invocation.event.toolName ?? "(unnamed)";
+  if (Date.now() >= approval.expiresAt) {
+    return {
+      decision: "deny",
+      reason: askDenialReason(approval.rule, toolName, "approval expired before Host-final validation"),
+    };
+  }
+  if (toolCallFingerprint(toolName, invocation.input) !== approval.fingerprint) {
+    return {
+      decision: "deny",
+      reason: askDenialReason(approval.rule, toolName, "Host-final input no longer matches the approved action"),
+    };
+  }
+  return undefined;
+}
+
+function toolCallFingerprint(toolName: string, input: Readonly<Record<string, unknown>>): string {
+  const serialized = canonicalJson({ toolName, input });
+  return createHash("sha256").update(serialized ?? "null").digest("hex");
+}
+
+function askDenialReason(rule: PolicyRuleConfig, toolName: string, detail: string): string {
+  return `Policy Engine rule "${rule.id}" (severity: ask) denies tool "${toolName}": ${detail}`;
 }
 
 /** Highest severity wins; same-severity ties go to the smallest rule id. */

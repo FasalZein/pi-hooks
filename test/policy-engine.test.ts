@@ -69,10 +69,14 @@ export default createPiHooksExtension({ providers: [policyEngineProvider, greete
 `;
 }
 
-function policyConfig(rules: readonly unknown[], extraProviders: readonly unknown[] = []): string {
+function policyConfig(
+  rules: readonly unknown[],
+  extraProviders: readonly unknown[] = [],
+  configExtras: Readonly<Record<string, unknown>> = {},
+): string {
   return JSON.stringify({
     schemaVersion: 2,
-    providers: [{ id: "policy-engine", enabled: true, config: { rules } }, ...extraProviders],
+    providers: [{ id: "policy-engine", enabled: true, config: { rules, ...configExtras } }, ...extraProviders],
   });
 }
 
@@ -278,6 +282,28 @@ const scriptedModel = {
   maxTokens: 4096,
 };
 
+function transformingPolicySource(): string {
+  return `
+import { createPiHooksExtension, defineProvider, policyEngineProvider } from ${JSON.stringify(hooksIndexPath)};
+
+const hostTransform = defineProvider({
+  manifest: { id: "host-transform", version: "1.0.0", grants: ["events"] },
+  activate(facade) {
+    facade.events.registerModule({
+      id: "host-transform",
+      tool_call: {
+        transform(invocation) {
+          return { input: { ...invocation.input, note: "host-final" } };
+        },
+      },
+    });
+  },
+});
+
+export default createPiHooksExtension({ providers: [policyEngineProvider, hostTransform] });
+`;
+}
+
 function scriptedAssistant(content: readonly unknown[], stopReason: "toolUse" | "stop"): Record<string, unknown> {
   return {
     role: "assistant",
@@ -299,11 +325,13 @@ function scriptedAssistant(content: readonly unknown[], stopReason: "toolUse" | 
  * whose second turn stops. The marker side effect proves "executed"; its
  * absence proves "never executed"; the toolResult message in the transcript is
  * the model-visible output. */
+let scriptedToolCallSequence = 0;
+
 async function runScriptedToolTurn(
   session: AgentSession,
   toolCall: { name: string; arguments: Record<string, unknown> },
 ): Promise<{ isError?: boolean; text: string }> {
-  const toolCallId = "scripted-call-1";
+  const toolCallId = `scripted-call-${++scriptedToolCallSequence}`;
   let turn = 0;
   session.agent.state.model = scriptedModel as never;
   session.agent.streamFn = ((): unknown => {
@@ -399,6 +427,74 @@ describe("SLICE-0011 item 4: ask severity with fail-closed unattended safety", (
       expect(result.isError).toBe(true);
       expect(result.text).toContain("ask-marker");
       expect(await markerExecutions(markerPath)).toBe(0);
+    });
+  }, 30_000);
+});
+
+describe("SLICE-0011 item 6: Host-final approval fingerprints", () => {
+  const askMarkerRules = [
+    { id: "ask-marker", match: { tool: "marker" }, decision: "ask", scope: "marker tool", remedy: "approve the confirmation prompt" },
+  ];
+
+  function askMarkerConfig(configExtras: Readonly<Record<string, unknown>> = {}): string {
+    return policyConfig(askMarkerRules, [{ id: "marker-tools", enabled: true }], configExtras);
+  }
+
+  it("an approved elevated call executes once and replay requires a new approval", async () => {
+    const markerPath = join(await mkdtemp(join(tmpdir(), "pi-hooks-fingerprint-")), "marker.txt");
+    const calls: Array<[string, string]> = [];
+    let answer = true;
+    const uiContext = confirmingUiContext(calls, answer) as Record<string, unknown>;
+    uiContext.confirm = async (title: string, message: string) => {
+      calls.push([title, message]);
+      const current = answer;
+      answer = false;
+      return current;
+    };
+
+    await withPolicySession({ config: askMarkerConfig(), extensionSource: markerPolicySource(markerPath) }, async (session) => {
+      await session.bindExtensions({ uiContext: uiContext as never });
+
+      const first = await runScriptedToolTurn(session, { name: "marker", arguments: { note: "same" } });
+      expect(first.isError ?? false).toBe(false);
+      expect(await markerExecutions(markerPath)).toBe(1);
+
+      const replay = await runScriptedToolTurn(session, { name: "marker", arguments: { note: "same" } });
+      expect(replay.isError).toBe(true);
+      expect(await markerExecutions(markerPath)).toBe(1);
+      expect(calls).toHaveLength(2);
+    });
+  }, 30_000);
+
+  it("an approval past its configured TTL is not honored", async () => {
+    const markerPath = join(await mkdtemp(join(tmpdir(), "pi-hooks-fingerprint-")), "marker.txt");
+    const calls: Array<[string, string]> = [];
+    await withPolicySession({
+      config: askMarkerConfig({ approvalTtlSeconds: 0 }),
+      extensionSource: markerPolicySource(markerPath),
+    }, async (session) => {
+      await session.bindExtensions({ uiContext: confirmingUiContext(calls, true) as never });
+      const result = await runScriptedToolTurn(session, { name: "marker", arguments: { note: "expired" } });
+      expect(result.isError).toBe(true);
+      expect(result.text).toContain("ask-marker");
+      expect(await markerExecutions(markerPath)).toBe(0);
+      expect(calls).toHaveLength(1);
+    });
+  }, 30_000);
+
+  it("denies without re-asking when a transform changes the approved input before internalFinal", async () => {
+    const calls: Array<[string, string]> = [];
+    const config = policyConfig(
+      [{ id: "ask-bash", match: { tool: "bash" }, decision: "ask", scope: "shell", remedy: "approve the exact command" }],
+      [{ id: "host-transform", enabled: true }],
+    );
+    await withPolicySession({ config, extensionSource: transformingPolicySource() }, async (session) => {
+      await session.bindExtensions({ uiContext: confirmingUiContext(calls, true) as never });
+      const result = await emitToolCall(session, "bash", { command: "echo hi", note: "approved" });
+      expect(result).toMatchObject({ block: true });
+      expect(result?.reason).toContain("ask-bash");
+      expect(result?.reason).toContain("ask");
+      expect(calls).toHaveLength(1);
     });
   }, 30_000);
 });
