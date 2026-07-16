@@ -1,13 +1,17 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://tothemoon.dev/schemas/pi-hooks/global-v1.json",
-  "title": "Pi Hooks trusted global configuration v1",
+  "$id": "https://tothemoon.dev/schemas/pi-hooks/global-v2.json",
+  "title": "Pi Hooks trusted global configuration v2",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "modules"],
+  "required": ["schemaVersion"],
   "properties": {
-    "schemaVersion": { "const": 1 },
+    "schemaVersion": {
+      "description": "1 is accepted and migrated in-memory to 2; the on-disk file is never rewritten.",
+      "enum": [1, 2]
+    },
     "modules": {
+      "description": "events-grant shorthand: Hook Modules on the nine-event contract.",
       "type": "array",
       "items": {
         "type": "object",
@@ -17,6 +21,21 @@
           "id": { "type": "string", "minLength": 1 },
           "enabled": { "type": "boolean", "default": true },
           "required": { "type": "boolean", "default": true }
+        }
+      }
+    },
+    "providers": {
+      "description": "Capability Providers authorized by trusted global configuration.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "enabled": { "type": "boolean", "default": true },
+          "required": { "type": "boolean", "default": true },
+          "config": { "description": "Validated against the provider manifest configSchema." }
         }
       }
     },

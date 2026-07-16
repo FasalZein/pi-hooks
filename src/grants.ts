@@ -67,10 +67,19 @@ export interface GrantApiMap {
 /** The typed facade: only the declared grant kinds are present as properties. */
 export type GrantFacade<G extends GrantKind> = { [K in G]: GrantApiMap[K] };
 
-export interface CapabilityProvider<G extends GrantKind = GrantKind> {
+export interface CapabilityProvider<G extends GrantKind> {
   manifest: CapabilityManifest & { grants: readonly G[] };
   activate(facade: GrantFacade<G>, config: unknown): void | Promise<void>;
 }
+
+/**
+ * Erased storage type for a provider of any grant set. Used only where the
+ * Host holds a heterogeneous list; authors never write it — `defineProvider`
+ * infers the narrow grant set. There is deliberately no all-grants default on
+ * `CapabilityProvider`, so a directly annotated `CapabilityProvider<"events">`
+ * cannot reach `facade.tools`.
+ */
+export type AnyCapabilityProvider = CapabilityProvider<GrantKind>;
 
 /**
  * Identity helper that pins the grant literal set so `activate` receives a

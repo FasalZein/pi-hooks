@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { GrantFacade, HookModule } from "../src/index.js";
+import type { CapabilityProvider, GrantFacade, HookModule } from "../src/index.js";
 
 /**
  * Compile-time contract (SLICE-0007/SLICE-0008): HookModule effects are
@@ -123,6 +123,18 @@ function grantFacadeAssertions(): void {
   // @ts-expect-error "registerProvider" is not a GrantKind, so no such facade exists
   const _noProviderGrant = {} as GrantFacade<"registerProvider">;
   void _noProviderGrant;
+
+  // A directly annotated (non-defineProvider) events-only provider still cannot
+  // reach an undeclared grant: CapabilityProvider has no all-grants default.
+  const eventsOnlyProvider: CapabilityProvider<"events"> = {
+    manifest: { id: "p", version: "1.0.0", grants: ["events"] },
+    activate(facade) {
+      facade.events.registerModule({ id: "m" });
+      // @ts-expect-error events-only provider cannot use the tools grant
+      facade.tools;
+    },
+  };
+  void eventsOnlyProvider;
 }
 
 describe("capability grant facade contract", () => {

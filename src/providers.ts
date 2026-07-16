@@ -6,7 +6,7 @@ import type { GlobalConfig, ProviderConfigEntry } from "./config.js";
 import {
   buildFacade,
   GRANT_KINDS,
-  type CapabilityProvider,
+  type AnyCapabilityProvider,
   type GrantKind,
   type GrantWiring,
   type ProcessSpec,
@@ -70,7 +70,7 @@ export interface ProviderActivation {
  * affect the others.
  */
 export async function activateProviders(
-  available: readonly CapabilityProvider[],
+  available: readonly AnyCapabilityProvider[],
   config: GlobalConfig,
 ): Promise<ProviderActivation> {
   const authorized = new Map<string, ProviderConfigEntry>();
@@ -89,62 +89,143 @@ export async function activateProviders(
   };
 
   for (const provider of available) {
-    const manifest = provider.manifest;
-    const entry = authorized.get(manifest.id);
-    if (!entry) continue; // not authorized by trusted global configuration
-
-    const required = entry.required !== false;
-    const enabled = entry.enabled !== false;
-    const prepared: PreparedProvider = {
-      id: manifest.id,
-      version: manifest.version,
-      grants: manifest.grants,
-      source: "global",
-      enabled,
-      required,
-      health: "healthy",
-    };
-    activation.providers.push(prepared);
-
-    const manifestError = validateManifest(provider);
-    if (manifestError) {
-      degrade(prepared, activation, `manifest invalid: ${manifestError}`);
-      continue;
-    }
-    if (!enabled) continue;
-
-    const configError = validateProviderConfig(manifest.configSchema, entry.config);
-    if (configError) {
-      degrade(prepared, activation, `config invalid: ${configError}`);
-      continue;
-    }
-
-    const wiring = collectingWiring(prepared, activation);
-    const refuse = (grant: GrantKind, method: string): void => {
-      activation.records.push(refusalRecord(manifest.id, grant, method));
-    };
-    const facade = buildFacade(manifest.grants, wiring, refuse);
-
+    // Snapshot the whole unknown provider defensively (surviving throwing
+    // getters), then validate the snapshot, inside a per-provider guard, so one
+    // malformed provider can never abort or mis-attribute another.
+    let current: PreparedProvider | undefined;
     try {
+      const snapshot = snapshotManifest(provider);
+      const id = typeof snapshot.id === "string" && snapshot.id.length > 0 ? snapshot.id : undefined;
+      if (id === undefined) continue; // cannot be authorized without a usable id
+      const entry = authorized.get(id);
+      if (!entry) continue; // not authorized by trusted global configuration
+
+      current = {
+        id,
+        version: typeof snapshot.version === "string" ? snapshot.version : "",
+        grants: Array.isArray(snapshot.grants) ? (snapshot.grants as GrantKind[]) : [],
+        source: "global",
+        enabled: entry.enabled !== false,
+        required: entry.required !== false,
+        health: "healthy",
+      };
+      activation.providers.push(current);
+
+      const manifestError = validateSnapshot(snapshot, provider);
+      if (manifestError) {
+        degrade(current, activation, `manifest invalid: ${manifestError}`);
+        continue;
+      }
+      if (!current.enabled) continue;
+
+      const configError = validateProviderConfig(snapshot.configSchema as TSchema | undefined, entry.config);
+      if (configError) {
+        degrade(current, activation, `config invalid: ${configError}`);
+        continue;
+      }
+
+      // Transactional activation: stage all grant outputs into a private buffer;
+      // commit to shared state only if activate() completes. A provider that
+      // registers and then throws leaves nothing behind.
+      const staged = emptyActivation();
+      const wiring = collectingWiring(current, staged);
+      // Refusals are security events: record them on the committed log immediately
+      // so they survive an activation rollback (the refusal proxy throws after).
+      const refuse = (grant: GrantKind, methodName: string): void => {
+        activation.records.push(refusalRecord(id, grant, methodName));
+      };
+      const facade = buildFacade(current.grants, wiring, refuse);
       await provider.activate(facade as never, entry.config);
+      commit(activation, staged);
     } catch (error) {
-      degrade(prepared, activation, `activation failed: ${message(error)}`);
+      // The throw belongs to the provider we were activating; its staged output
+      // was discarded. Degrade only that provider, never a sibling.
+      if (current && current.health === "healthy") degrade(current, activation, `activation failed: ${message(error)}`);
     }
   }
 
   return activation;
 }
 
-function validateManifest(provider: CapabilityProvider): string | undefined {
-  const manifest = provider.manifest as Partial<CapabilityProvider["manifest"]>;
-  if (typeof manifest?.id !== "string" || manifest.id.length === 0) return "missing id";
-  if (typeof manifest.version !== "string" || manifest.version.length === 0) return "missing version";
-  if (!Array.isArray(manifest.grants) || manifest.grants.length === 0) return "no grants declared";
-  for (const grant of manifest.grants) {
+interface ManifestSnapshot {
+  id?: unknown;
+  version?: unknown;
+  grants?: unknown;
+  configSchema?: unknown;
+  projectConfigurable?: unknown;
+  accessError?: string;
+}
+
+const THREW = Symbol("getter-threw");
+
+function safeGet(target: Record<string, unknown>, key: string): unknown {
+  try {
+    return target[key];
+  } catch {
+    return THREW;
+  }
+}
+
+function snapshotManifest(provider: AnyCapabilityProvider): ManifestSnapshot {
+  if (provider === null || typeof provider !== "object") return { accessError: "missing provider object" };
+  const manifest = safeGet(provider as unknown as Record<string, unknown>, "manifest");
+  if (manifest === THREW || !manifest || typeof manifest !== "object") return { accessError: "missing manifest" };
+  const m = manifest as Record<string, unknown>;
+  // Read each field in its own guard so one throwing getter (e.g. grants) never
+  // loses the id we need to still isolate and attribute the provider.
+  const snapshot: ManifestSnapshot = {};
+  const errors: string[] = [];
+  for (const key of ["id", "version", "grants", "configSchema", "projectConfigurable"] as const) {
+    const value = safeGet(m, key);
+    if (value === THREW) errors.push(`${key} getter threw`);
+    else snapshot[key] = value;
+  }
+  if (errors.length > 0) snapshot.accessError = errors.join("; ");
+  return snapshot;
+}
+
+function validateSnapshot(snapshot: ManifestSnapshot, provider: AnyCapabilityProvider): string | undefined {
+  if (snapshot.accessError) return snapshot.accessError;
+  if (typeof snapshot.version !== "string" || snapshot.version.length === 0) return "missing version";
+  if (!Array.isArray(snapshot.grants) || snapshot.grants.length === 0) return "no grants declared";
+  for (const grant of snapshot.grants) {
     if (!GRANT_KINDS.includes(grant as GrantKind)) return `unknown grant: ${String(grant)}`;
   }
-  if (typeof provider.activate !== "function") return "missing activate";
+  if (snapshot.configSchema !== undefined && (snapshot.configSchema === null || typeof snapshot.configSchema !== "object")) return "configSchema must be a TypeBox schema";
+  if (snapshot.projectConfigurable !== undefined && typeof snapshot.projectConfigurable !== "boolean") return "projectConfigurable must be boolean";
+  let activate: unknown;
+  try {
+    activate = (provider as { activate?: unknown }).activate;
+  } catch {
+    return "activate access threw";
+  }
+  if (typeof activate !== "function") return "missing activate";
   return undefined;
+}
+
+function emptyActivation(): ProviderActivation {
+  return {
+    modules: [],
+    requiredByModuleId: new Map(),
+    providerByModuleId: new Map(),
+    tools: [],
+    commands: [],
+    processes: [],
+    uiOps: [],
+    providers: [],
+    records: [],
+  };
+}
+
+function commit(target: ProviderActivation, staged: ProviderActivation): void {
+  target.modules.push(...staged.modules);
+  for (const [id, req] of staged.requiredByModuleId) target.requiredByModuleId.set(id, req);
+  for (const [id, provider] of staged.providerByModuleId) target.providerByModuleId.set(id, provider);
+  target.tools.push(...staged.tools);
+  target.commands.push(...staged.commands);
+  target.processes.push(...staged.processes);
+  target.uiOps.push(...staged.uiOps);
+  target.records.push(...staged.records);
 }
 
 function validateProviderConfig(schema: TSchema | undefined, config: unknown): string | undefined {

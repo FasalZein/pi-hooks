@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { createAgentSession, DefaultResourceLoader, SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { Type } from "typebox";
-import { createHookHost, defineProvider } from "../src/index.js";
+import { createHookHost, defineProvider, normalizeEvent } from "../src/index.js";
 import { loadGlobalConfig } from "../src/config.js";
 
 const hooksIndexPath = fileURLToPath(new URL("../src/index.ts", import.meta.url));
@@ -461,4 +461,131 @@ export default createPiHooksExtension({ providers: [flaky] });
       expect(failure).toBeDefined();
     });
   }, 30_000);
+});
+
+describe("SLICE-0009 review repair regressions", () => {
+  it("R1a process grant: kills the whole process tree at shutdown (no orphaned grandchild)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-hooks-tree-"));
+    const parentPid = join(dir, "parent.pid");
+    const grandPid = join(dir, "grand.pid");
+    const gcScript = "const fs=require('fs'); fs.writeFileSync(process.argv[1], String(process.pid)); setInterval(()=>{},10000);";
+    const script = "const {spawn}=require('child_process'); const fs=require('fs');"
+      + " fs.writeFileSync(process.argv[1], String(process.pid));"
+      + " spawn('node',['-e'," + JSON.stringify(gcScript) + ",process.argv[2]],{stdio:'ignore'});"
+      + " setInterval(()=>{},10000);";
+    const source = `
+import { createPiHooksExtension, defineProvider } from ${JSON.stringify(hooksIndexPath)};
+const proc = defineProvider({
+  manifest: { id: "tree", version: "1.0.0", grants: ["process"] },
+  activate(facade) {
+    facade.process.spawn({ id: "tree", command: "node", args: ["-e", ${JSON.stringify(script)}, ${JSON.stringify(parentPid)}, ${JSON.stringify(grandPid)}] });
+  },
+});
+export default createPiHooksExtension({ providers: [proc] });
+`;
+    const config = JSON.stringify({ schemaVersion: 2, providers: [{ id: "tree", enabled: true }] });
+    await withProviderSession({ config, extensionSource: source }, async (session) => {
+      await session.extensionRunner!.emit({ type: "session_start", reason: "startup" } as never);
+      expect(await waitFor(async () => { try { await readFile(grandPid, "utf8"); return true; } catch { return false; } })).toBe(true);
+      const parent = Number((await readFile(parentPid, "utf8")).trim());
+      const grand = Number((await readFile(grandPid, "utf8")).trim());
+      expect(isAlive(parent)).toBe(true);
+      expect(isAlive(grand)).toBe(true);
+      await session.extensionRunner!.emit({ type: "session_shutdown", reason: "quit" } as never);
+      expect(await waitFor(() => !isAlive(parent) && !isAlive(grand))).toBe(true);
+    });
+  }, 30_000);
+
+  it("R1b process grant: a spawn error (ENOENT) degrades the provider instead of being swallowed", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-hooks-enoent-"));
+    const configPath = join(dir, "pi-hooks.jsonc");
+    await writeFile(configPath, JSON.stringify({ schemaVersion: 2, providers: [{ id: "badproc", enabled: true }] }));
+    const badproc = defineProvider({
+      manifest: { id: "badproc", version: "1.0.0", grants: ["process"] },
+      activate(facade) { facade.process.spawn({ id: "nope", command: "definitely-not-a-real-binary-xyz" }); },
+    });
+    const host = await createHookHost({ configPath, providers: [badproc] });
+    await host.dispatch(normalizeEvent("session_start", { reason: "startup" }), { cwd: dir, hasUI: false } as never);
+    expect(await waitFor(() => host.status().runtime.health === "degraded")).toBe(true);
+    expect(host.status().providers.find((p) => p.id === "badproc")?.health).toBe("degraded");
+  }, 30_000);
+
+  it("R2 transactional activation: a provider that registers then throws leaves nothing registered", async () => {
+    const auditDir = await mkdtemp(join(tmpdir(), "pi-hooks-rollback-audit-"));
+    const auditPath = join(auditDir, "audit.jsonl");
+    const source = `
+import { Type } from "typebox";
+import { createPiHooksExtension, defineProvider } from ${JSON.stringify(hooksIndexPath)};
+const halfBaked = defineProvider({
+  manifest: { id: "half", version: "1.0.0", grants: ["tools"] },
+  activate(facade) {
+    facade.tools.registerTool({
+      name: "half-tool", label: "Half", description: "registered before the throw",
+      parameters: Type.Object({}),
+      async execute() { return { content: [{ type: "text", text: "no" }] }; },
+    });
+    throw new Error("activation blew up after registering");
+  },
+});
+export default createPiHooksExtension({ providers: [halfBaked] });
+`;
+    const config = JSON.stringify({
+      schemaVersion: 2,
+      providers: [{ id: "half", enabled: true }],
+      audit: { path: auditPath },
+    });
+    await withProviderSession({ config, extensionSource: source }, async (session) => {
+      // Rollback: the tool staged before the throw was never committed to Pi.
+      expect(session.getToolDefinition("half-tool")).toBeUndefined();
+      const lines = (await readFile(auditPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+      expect(lines.find((line) => line.provider === "half" && line.decision === "module-failure")).toBeDefined();
+    });
+  }, 30_000);
+
+  it("R3 malformed manifest: a throwing-getter provider isolates without aborting a valid sibling", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-hooks-malformed-"));
+    const configPath = join(dir, "pi-hooks.jsonc");
+    await writeFile(configPath, JSON.stringify({
+      schemaVersion: 2,
+      providers: [{ id: "garbage", enabled: true }, { id: "good", enabled: true }],
+    }));
+    // A dynamically-loaded provider whose manifest.grants getter throws.
+    const garbage = {
+      manifest: { id: "garbage", version: "1.0.0", get grants() { throw new Error("boom"); } },
+      activate() {},
+    } as never;
+    const good = defineProvider({
+      manifest: { id: "good", version: "1.0.0", grants: ["events"] },
+      activate(facade) { facade.events.registerModule({ id: "good-mod", agent_end: { observe: () => undefined } }); },
+    });
+    const host = await createHookHost({ configPath, providers: [garbage, good] });
+    const providers = host.status().providers;
+    expect(providers.find((p) => p.id === "garbage")?.health).toBe("degraded");
+    expect(providers.find((p) => p.id === "good")?.health).toBe("healthy");
+  });
+
+  it("R5 provider runtime module failure degrades that provider's health", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-hooks-runhealth-"));
+    const configPath = join(dir, "pi-hooks.jsonc");
+    await writeFile(configPath, JSON.stringify({
+      schemaVersion: 2,
+      providers: [{ id: "flaky", enabled: true, required: false }],
+    }));
+    const flaky = defineProvider({
+      manifest: { id: "flaky", version: "1.0.0", grants: ["events"] },
+      activate(facade) {
+        facade.events.registerModule({
+          id: "flaky-mod",
+          tool_call: { guard: () => { throw new Error("runtime boom"); } },
+        });
+      },
+    });
+    const host = await createHookHost({ configPath, providers: [flaky] });
+    expect(host.status().providers.find((p) => p.id === "flaky")?.health).toBe("healthy");
+    await host.dispatch(
+      normalizeEvent("tool_call", { toolName: "bash", toolCallId: "r5", input: { command: "echo" } }),
+      { cwd: dir, hasUI: false } as never,
+    );
+    expect(host.status().providers.find((p) => p.id === "flaky")?.health).toBe("degraded");
+  });
 });

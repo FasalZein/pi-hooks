@@ -7,7 +7,7 @@ import { preparePolicy } from "./policy.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { resolveOrder } from "./order.js";
 import { activateProviders, type PreparedProvider, type ProviderActivation } from "./providers.js";
-import type { CapabilityProvider, ProviderCommand } from "./grants.js";
+import type { AnyCapabilityProvider, ProviderCommand } from "./grants.js";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type {
   AuditRecord,
@@ -33,11 +33,12 @@ import type {
 const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
 const EFFECT_BEARING = new Set<NormalizedEvent["type"]>(["input", "tool_call", "tool_result", "context"]);
 const FINAL_BOUNDARY = "Authoritative only inside this Host tool_call handler; a later Pi extension can still mutate input before execution.";
+const PROCESS_GRANT_NOTE = "process-grant child processes run with the Pi process's OS permissions, outside the observed tool_call boundary; the Host owns their lifecycle (deferred start, killed at shutdown) but does not sandbox them.";
 
 export interface CreateHookHostOptions {
   configPath?: string;
   modules?: readonly HookModule[];
-  providers?: readonly CapabilityProvider[];
+  providers?: readonly AnyCapabilityProvider[];
 }
 
 /** Real Pi bindings supplied by the adapter to flush granted registrations. */
@@ -113,7 +114,7 @@ class Host implements HookHost {
   private readonly pendingCommands: ProviderActivation["commands"];
   private readonly pendingProcesses: ProviderActivation["processes"];
   private readonly pendingUiOps: ProviderActivation["uiOps"];
-  private readonly children: ChildProcess[] = [];
+  private readonly children: Array<{ child: ChildProcess; providerId: string; specId: string }> = [];
   private readonly providerByModuleId: Map<string, string>;
   private processesStarted = false;
 
@@ -146,30 +147,70 @@ class Host implements HookHost {
     for (const registration of this.pendingCommands) bindings.registerCommand(registration.name, registration.command);
   }
 
-  /** process grant: deferred start on session_start; Host owns the lifecycle. */
+  /**
+   * process grant: deferred start on session_start; the Host owns the whole
+   * process tree. Children are spawned detached as process-group leaders so
+   * shutdown can signal the entire group (child + grandchildren), and spawn
+   * failures degrade the owning provider instead of being swallowed.
+   */
   private startProcesses(): void {
     if (this.isSafeMode() || this.processesStarted) return;
     this.processesStarted = true;
-    for (const { spec } of this.pendingProcesses) {
+    for (const { providerId, spec } of this.pendingProcesses) {
       try {
-        const child = spawn(spec.command, [...(spec.args ?? [])], { stdio: "ignore", detached: false });
-        child.on("error", () => undefined);
-        this.children.push(child);
+        const child = spawn(spec.command, [...(spec.args ?? [])], { stdio: "ignore", detached: true });
+        child.on("error", (error) => {
+          this.degradeProvider(providerId, `process ${spec.id} failed: ${message(error)}`);
+          void this.audit.record(this.processRecord(providerId, spec.id, "module-failure", `process ${spec.id} error`));
+        });
+        child.unref();
+        this.children.push({ child, providerId, specId: spec.id });
+        void this.audit.record(this.processRecord(providerId, spec.id, "allow", `process ${spec.id} started`));
       } catch (error) {
-        this.runtimeFailure = `process ${spec.id} spawn failed: ${message(error)}`;
+        this.degradeProvider(providerId, `process ${spec.id} spawn failed: ${message(error)}`);
+        void this.audit.record(this.processRecord(providerId, spec.id, "module-failure", `process ${spec.id} spawn failed`));
       }
     }
   }
 
-  /** Terminate all provider processes at session shutdown — no orphans. */
+  /** Terminate every provider process tree at session shutdown — no orphans. */
   private killProcesses(): void {
-    for (const child of this.children.splice(0)) {
+    for (const { child } of this.children.splice(0)) {
+      const pid = child.pid;
+      if (pid === undefined || child.exitCode !== null || child.signalCode !== null) continue;
       try {
-        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+        // Kill the whole process group (negative pid); detached children are
+        // group leaders, so this reaps grandchildren too.
+        process.kill(-pid, "SIGKILL");
       } catch {
-        /* already gone */
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* already gone */
+        }
       }
     }
+  }
+
+  private degradeProvider(id: string, failure: string): void {
+    const provider = this.providers.find((candidate) => candidate.id === id);
+    if (provider && provider.health === "healthy") {
+      provider.health = "degraded";
+      provider.lastFailure = failure;
+    }
+    this.runtimeFailure = failure;
+  }
+
+  private processRecord(provider: string, specId: string, decision: AuditRecord["decision"], reason: string): AuditRecord {
+    return {
+      timestamp: new Date().toISOString(),
+      moduleId: "host",
+      provider,
+      eventType: "session_start",
+      phase: "host",
+      decision,
+      reason: `${specId}: ${reason}`,
+    };
   }
 
   /** ui grant: apply captured status/widget ops through the real Pi ctx.ui. */
@@ -224,6 +265,7 @@ class Host implements HookHost {
       mode: this.isSafeMode() ? "read-only-safe" : "normal",
       audit,
       finalInterceptor: { available: false, boundary: FINAL_BOUNDARY },
+      grantBoundary: { processToolCallGated: false, note: PROCESS_GRANT_NOTE },
     };
   }
 
@@ -452,6 +494,8 @@ class Host implements HookHost {
       } catch (error) {
         const failure = `${module.id} ${phase} failed: ${message(error)}`;
         this.runtimeFailure = failure;
+        const owner = this.providerByModuleId.get(module.id);
+        if (owner) this.degradeProvider(owner, `module ${module.id} ${phase} failed`);
         await this.writeDecision(module.id, event, context, phase, "module-failure", failure, currentInput);
         if (phase !== "observe" && this.requiredById.get(module.id) !== false) {
           state.decision = "deny";

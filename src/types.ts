@@ -248,4 +248,10 @@ export interface HostStatus {
     available: false;
     boundary: string;
   };
+  /** Honest grant-boundary disclosure surfaced to operators. */
+  grantBoundary: {
+    /** The process grant runs child processes outside the observed tool_call boundary. */
+    processToolCallGated: false;
+    note: string;
+  };
 }
