@@ -4,9 +4,10 @@ import { AuditLog } from "./audit.js";
 import { cloneDeep, frozenView, safeFrozenView } from "./isolate.js";
 import { loadGlobalConfig, type GlobalConfig } from "./config.js";
 import { preparePolicy } from "./policy.js";
+import { spawn, type ChildProcess } from "node:child_process";
 import { resolveOrder } from "./order.js";
 import { activateProviders, type PreparedProvider, type ProviderActivation } from "./providers.js";
-import type { CapabilityProvider } from "./grants.js";
+import type { CapabilityProvider, ProviderCommand } from "./grants.js";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type {
   AuditRecord,
@@ -42,6 +43,7 @@ export interface CreateHookHostOptions {
 /** Real Pi bindings supplied by the adapter to flush granted registrations. */
 export interface PiGrantBindings {
   registerTool(tool: ToolDefinition): void;
+  registerCommand(name: string, command: ProviderCommand): void;
 }
 
 export interface HookHost {
@@ -108,6 +110,11 @@ class Host implements HookHost {
 
   private readonly providers: PreparedProvider[];
   private readonly pendingTools: ProviderActivation["tools"];
+  private readonly pendingCommands: ProviderActivation["commands"];
+  private readonly pendingProcesses: ProviderActivation["processes"];
+  private readonly pendingUiOps: ProviderActivation["uiOps"];
+  private readonly children: ChildProcess[] = [];
+  private processesStarted = false;
 
   constructor(
     private readonly configPath: string,
@@ -122,6 +129,9 @@ class Host implements HookHost {
     this.configFailure = failure;
     this.providers = activation?.providers ?? [];
     this.pendingTools = activation?.tools ?? [];
+    this.pendingCommands = activation?.commands ?? [];
+    this.pendingProcesses = activation?.processes ?? [];
+    this.pendingUiOps = activation?.uiOps ?? [];
     // An isolated provider degrades the runtime lane only; configuration stays
     // valid and the host stays out of safe mode for a single bad provider.
     const degraded = this.providers.find((provider) => provider.health === "degraded");
@@ -131,6 +141,42 @@ class Host implements HookHost {
   bindPi(bindings: PiGrantBindings): void {
     if (this.isSafeMode()) return;
     for (const registration of this.pendingTools) bindings.registerTool(registration.tool);
+    for (const registration of this.pendingCommands) bindings.registerCommand(registration.name, registration.command);
+  }
+
+  /** process grant: deferred start on session_start; Host owns the lifecycle. */
+  private startProcesses(): void {
+    if (this.isSafeMode() || this.processesStarted) return;
+    this.processesStarted = true;
+    for (const { spec } of this.pendingProcesses) {
+      try {
+        const child = spawn(spec.command, [...(spec.args ?? [])], { stdio: "ignore", detached: false });
+        child.on("error", () => undefined);
+        this.children.push(child);
+      } catch (error) {
+        this.runtimeFailure = `process ${spec.id} spawn failed: ${message(error)}`;
+      }
+    }
+  }
+
+  /** Terminate all provider processes at session shutdown — no orphans. */
+  private killProcesses(): void {
+    for (const child of this.children.splice(0)) {
+      try {
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      } catch {
+        /* already gone */
+      }
+    }
+  }
+
+  /** ui grant: apply captured status/widget ops through the real Pi ctx.ui. */
+  private flushUi(context: DispatchContext): void {
+    if (this.isSafeMode() || !context.ui) return;
+    for (const op of this.pendingUiOps) {
+      if (op.kind === "status") context.ui.setStatus(op.key, op.text);
+      else context.ui.setWidget?.(op.key, op.lines);
+    }
   }
 
   async recordSafeMode(reason: string): Promise<void> {
@@ -171,6 +217,12 @@ class Host implements HookHost {
   }
 
   async dispatch(event: NormalizedEvent, context: DispatchContext): Promise<DispatchResult> {
+    if (event.type === "session_start") {
+      this.startProcesses();
+      this.flushUi(context);
+    } else if (event.type === "session_shutdown") {
+      this.killProcesses();
+    }
     if (this.isSafeMode()) return this.safeModeDispatch(event, context);
     switch (event.type) {
       case "input":

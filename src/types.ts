@@ -46,6 +46,11 @@ export interface DispatchContext {
     getSessionFile?(): string | undefined;
     getSessionId?(): string;
   };
+  /** Real Pi UI surface, present on events dispatched from a loaded session. */
+  ui?: {
+    setStatus(key: string, text: string | undefined): void;
+    setWidget?(key: string, lines: readonly string[] | undefined): void;
+  };
 }
 
 export interface HookInvocation {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { HookModule } from "../src/index.js";
+import type { GrantFacade, HookModule } from "../src/index.js";
 
 /**
  * Compile-time contract (SLICE-0007/SLICE-0008): HookModule effects are
@@ -101,6 +101,35 @@ const contextRejectsMalformedMessages: HookModule = {
   // @ts-expect-error messages must be Pi AgentMessage values (role/content/timestamp), not bare objects
   context: { transform: () => ({ messages: [{ role: "user" }] }) },
 };
+
+/**
+ * Capability grant facade contract (SLICE-0009): a provider receives only the
+ * grant kinds it declares. Model-provider registration and raw ExtensionAPI
+ * passthrough are not grant kinds and are unexpressible by type.
+ */
+function grantFacadeAssertions(): void {
+  const toolsFacade = {} as GrantFacade<"tools">;
+  toolsFacade.tools.registerTool({} as never); // declared grant is usable
+  // @ts-expect-error the events grant is undeclared for a tools-only facade
+  toolsFacade.events;
+
+  const eventsFacade = {} as GrantFacade<"events">;
+  eventsFacade.events.registerModule({ id: "m" });
+  // @ts-expect-error raw Pi ExtensionAPI (pi.on) is never handed to a provider
+  eventsFacade.on;
+  // @ts-expect-error model-provider registration is not a grant and is unexpressible
+  eventsFacade.registerProvider;
+
+  // @ts-expect-error "registerProvider" is not a GrantKind, so no such facade exists
+  const _noProviderGrant = {} as GrantFacade<"registerProvider">;
+  void _noProviderGrant;
+}
+
+describe("capability grant facade contract", () => {
+  it("exposes only declared grants and never model-provider or raw ExtensionAPI", () => {
+    expect(typeof grantFacadeAssertions).toBe("function");
+  });
+});
 
 describe("event-keyed HookModule contract", () => {
   it("accepts exactly the per-event effects Pi 0.80.7 consumes", () => {

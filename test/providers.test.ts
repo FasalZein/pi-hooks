@@ -234,3 +234,133 @@ describe("SLICE-0009 AC2: manifest and config-schema validation isolates a provi
     expect(status.mode).toBe("normal");
   });
 });
+
+function recordingUiContext(sink: Array<[string, string | undefined]>): unknown {
+  return {
+    select: async () => undefined,
+    confirm: async () => false,
+    input: async () => undefined,
+    notify: () => undefined,
+    onTerminalInput: () => () => undefined,
+    setStatus: (key: string, text: string | undefined) => sink.push([key, text]),
+    setWorkingMessage: () => undefined,
+    setWorkingVisible: () => undefined,
+    setWorkingIndicator: () => undefined,
+    setHiddenThinkingLabel: () => undefined,
+    setWidget: () => undefined,
+    setFooter: () => undefined,
+    setHeader: () => undefined,
+    setTitle: () => undefined,
+    custom: () => undefined,
+  };
+}
+
+async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 5000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return false;
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+describe("SLICE-0009 AC3: every grant kind maps to a real Pi effect", () => {
+  it("events grant: a provider Hook Module denies a tool at the real tool_call seam", async () => {
+    const source = `
+import { createPiHooksExtension, defineProvider } from ${JSON.stringify(hooksIndexPath)};
+const denier = defineProvider({
+  manifest: { id: "denier", version: "1.0.0", grants: ["events"] },
+  activate(facade) {
+    facade.events.registerModule({
+      id: "denier-mod",
+      tool_call: { guard: ({ event }) => (event.toolName === "bash" ? { decision: "deny", reason: "events grant denied bash" } : undefined) },
+    });
+  },
+});
+export default createPiHooksExtension({ providers: [denier] });
+`;
+    const config = JSON.stringify({ schemaVersion: 2, providers: [{ id: "denier", enabled: true }] });
+    await withProviderSession({ config, extensionSource: source }, async (session) => {
+      const result = await session.extensionRunner!.emitToolCall({
+        type: "tool_call", toolName: "bash", toolCallId: "e1", input: { command: "echo hi" },
+      } as never);
+      expect(result).toMatchObject({ block: true, reason: expect.stringContaining("events grant denied bash") });
+    });
+  }, 30_000);
+
+  it("commands grant: a provider slash command executes at the real seam", async () => {
+    const marker = join(await mkdtemp(join(tmpdir(), "pi-hooks-cmd-")), "cmd.marker");
+    const source = `
+import { writeFile } from "node:fs/promises";
+import { createPiHooksExtension, defineProvider } from ${JSON.stringify(hooksIndexPath)};
+const cmd = defineProvider({
+  manifest: { id: "cmder", version: "1.0.0", grants: ["commands"] },
+  activate(facade) {
+    facade.commands.registerCommand("greetcmd", {
+      description: "provider command",
+      handler: async () => { await writeFile(${JSON.stringify(marker)}, "cmd-ran"); },
+    });
+  },
+});
+export default createPiHooksExtension({ providers: [cmd] });
+`;
+    const config = JSON.stringify({ schemaVersion: 2, providers: [{ id: "cmder", enabled: true }] });
+    await withProviderSession({ config, extensionSource: source }, async (session) => {
+      await session.prompt("/greetcmd");
+      expect(await readFile(marker, "utf8")).toBe("cmd-ran");
+    });
+  }, 30_000);
+
+  it("process grant: Host defers start to session_start and kills at session_shutdown with no orphan", async () => {
+    const pidFile = join(await mkdtemp(join(tmpdir(), "pi-hooks-proc-")), "child.pid");
+    const source = `
+import { createPiHooksExtension, defineProvider } from ${JSON.stringify(hooksIndexPath)};
+const script = "const fs=require('fs'); fs.writeFileSync(process.argv[1], String(process.pid)); setInterval(()=>{}, 10000);";
+const proc = defineProvider({
+  manifest: { id: "procer", version: "1.0.0", grants: ["process"] },
+  activate(facade) {
+    facade.process.spawn({ id: "worker", command: "node", args: ["-e", script, ${JSON.stringify(pidFile)}] });
+  },
+});
+export default createPiHooksExtension({ providers: [proc] });
+`;
+    const config = JSON.stringify({ schemaVersion: 2, providers: [{ id: "procer", enabled: true }] });
+    await withProviderSession({ config, extensionSource: source }, async (session) => {
+      // Deferred: not started merely by loading. Start on session_start.
+      await session.extensionRunner!.emit({ type: "session_start", reason: "startup" } as never);
+      expect(await waitFor(async () => { try { await readFile(pidFile, "utf8"); return true; } catch { return false; } })).toBe(true);
+      const pid = Number((await readFile(pidFile, "utf8")).trim());
+      expect(isAlive(pid)).toBe(true);
+
+      await session.extensionRunner!.emit({ type: "session_shutdown", reason: "quit" } as never);
+      expect(await waitFor(() => !isAlive(pid))).toBe(true);
+    });
+  }, 30_000);
+
+  it("ui grant: a provider status reaches the real ctx.ui on session_start", async () => {
+    const source = `
+import { createPiHooksExtension, defineProvider } from ${JSON.stringify(hooksIndexPath)};
+const widgeter = defineProvider({
+  manifest: { id: "uier", version: "1.0.0", grants: ["ui"] },
+  activate(facade) { facade.ui.setStatus("uier:diagnostics", "3 warnings"); },
+});
+export default createPiHooksExtension({ providers: [widgeter] });
+`;
+    const config = JSON.stringify({ schemaVersion: 2, providers: [{ id: "uier", enabled: true }] });
+    const statuses: Array<[string, string | undefined]> = [];
+    await withProviderSession({ config, extensionSource: source }, async (session) => {
+      await session.bindExtensions({ uiContext: recordingUiContext(statuses) as never });
+      await session.extensionRunner!.emit({ type: "session_start", reason: "startup" } as never);
+      expect(statuses).toContainEqual(["uier:diagnostics", "3 warnings"]);
+    });
+  }, 30_000);
+});
