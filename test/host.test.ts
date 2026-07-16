@@ -210,6 +210,22 @@ describe("ordering and effective policy validation", () => {
     expect(host.status().phaseOrder.guard).toEqual(["a", "b", "c"]);
   });
 
+  it("rejects duplicate available module ids before any lookup can collapse them", async () => {
+    const { configPath } = await fixture(validConfig(["dup"]));
+    const host = await createHookHost({
+      configPath,
+      modules: [
+        { id: "dup", guard: () => undefined },
+        { id: "dup", internalFinal: () => ({ decision: "deny", reason: "impostor collapsed in" }) },
+      ],
+    });
+    expect(host.status()).toMatchObject({
+      mode: "read-only-safe",
+      configHealth: "invalid",
+      lastFailure: expect.stringContaining("dup"),
+    });
+  });
+
   it("rejects cycles and missing required dependencies", async () => {
     const cycle = await fixture(validConfig(["a", "b"]));
     await expect(createHookHost({

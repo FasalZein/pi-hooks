@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { AuditLog } from "./audit.js";
 import { cloneDeep, frozenView } from "./isolate.js";
 import { loadGlobalConfig, type GlobalConfig } from "./config.js";
-import { resolveOrder } from "./order.js";
+import { preparePolicy } from "./policy.js";
 import type { AuditRecord, DispatchContext, DispatchResult, HookModule, HookPhase, HostStatus, NormalizedEvent } from "./types.js";
 
 const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
@@ -21,7 +21,7 @@ export interface HookHost {
 
 export async function createHookHost(options: CreateHookHostOptions = {}): Promise<HookHost> {
   const configPath = options.configPath ?? defaultConfigPath();
-  const available = new Map((options.modules ?? []).map((module) => [module.id, module]));
+  const available = [...(options.modules ?? [])];
   let config: GlobalConfig | undefined;
   let modules: HookModule[] = [];
   let phaseOrder = emptyPhaseOrder();
@@ -29,23 +29,17 @@ export async function createHookHost(options: CreateHookHostOptions = {}): Promi
 
   try {
     config = await loadGlobalConfig(configPath);
-    const ids = new Set<string>();
-    const enabled: HookModule[] = [];
-    for (const entry of config.modules) {
-      if (ids.has(entry.id)) throw new Error(`Duplicate configured module id: ${entry.id}`);
-      ids.add(entry.id);
-      if (entry.enabled === false) continue;
-      const module = available.get(entry.id);
-      if (!module) throw new Error(`Configured module is unavailable: ${entry.id}`);
-      enabled.push(module);
-    }
-    ({ modules, phaseOrder } = resolveOrder(enabled));
   } catch (error) {
     failure = message(error);
   }
+  if (config) {
+    const policy = preparePolicy(available, config);
+    if (policy.ok) ({ modules, phaseOrder } = policy);
+    else failure = policy.failure;
+  }
 
   const audit = new AuditLog(config?.audit?.path, config?.audit?.includeAllows);
-  const host = new Host(configPath, config, modules, phaseOrder, audit, failure, [...available.values()]);
+  const host = new Host(configPath, config, modules, phaseOrder, audit, failure, available);
   if (failure) await host.recordSafeMode(failure);
   return host;
 }
