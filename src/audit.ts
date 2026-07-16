@@ -4,25 +4,33 @@ import { dirname } from "node:path";
 import type { AuditRecord } from "./types.js";
 
 const REDACTED = "[REDACTED]";
+const MAX_RETAINED = 256;
+
 export interface AuditHealth {
   health: "healthy" | "degraded";
   lastFailure?: string;
+  retained: number;
 }
 
 export class AuditLog {
-  readonly records: AuditRecord[] = [];
+  private readonly records: AuditRecord[] = [];
   private failure?: string;
 
   constructor(private readonly path?: string, private readonly includeAllows = false) {}
 
   status(): AuditHealth {
-    return this.failure ? { health: "degraded", lastFailure: this.failure } : { health: "healthy" };
+    return {
+      health: this.failure ? "degraded" : "healthy",
+      ...(this.failure ? { lastFailure: this.failure } : {}),
+      retained: this.records.length,
+    };
   }
 
-  async write(record: AuditRecord): Promise<void> {
+  async record(record: AuditRecord): Promise<void> {
     if (record.decision === "allow" && !this.includeAllows) return;
     const safe = minimize(record);
     this.records.push(safe);
+    if (this.records.length > MAX_RETAINED) this.records.splice(0, this.records.length - MAX_RETAINED);
     if (!this.path) return;
     try {
       await mkdir(dirname(this.path), { recursive: true });

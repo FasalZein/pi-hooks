@@ -78,7 +78,6 @@ export interface DispatchResult {
   mutated: boolean;
   input: Record<string, unknown>;
   contextAdditions: string[];
-  auditRecords: AuditRecord[];
 }
 
 export interface HostStatus {
@@ -92,6 +91,7 @@ export interface HostStatus {
   audit: {
     health: "healthy" | "degraded";
     lastFailure?: string;
+    retained: number;
   };
   finalInterceptor: {
     available: false;

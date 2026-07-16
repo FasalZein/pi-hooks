@@ -343,6 +343,38 @@ describe("configuration, safe mode, audit, and status", () => {
     expect(lines.map((line) => line.decision)).toEqual(expect.arrayContaining(["module-failure", "mutate", "deny"]));
   });
 
+  it("bounds in-memory audit retention while persisted JSONL stays complete, valid, and redacted", async () => {
+    const { configPath, auditPath } = await fixture(validConfig());
+    await writeFile(configPath, JSON.stringify({
+      schemaVersion: 1,
+      modules: [{ id: "denier" }],
+      audit: { path: auditPath },
+    }));
+    const host = await createHookHost({
+      configPath,
+      modules: [{ id: "denier", guard: () => ({ decision: "deny" as const, reason: "blocked token=hunter2" }) }],
+    });
+
+    for (let index = 0; index < 600; index += 1) {
+      const result = await host.dispatch(normalizeEvent("tool_call", {
+        toolName: "write",
+        toolCallId: `call-${index}`,
+        input: { path: `/tmp/file-${index}` },
+      }), ctx as never);
+      expect(result.decision).toBe("deny");
+    }
+
+    const retained = (host.status().audit as { retained?: number }).retained;
+    expect(retained).toBeDefined();
+    expect(retained!).toBeLessThanOrEqual(256);
+
+    const rawLines = (await readFile(auditPath, "utf8")).trim().split("\n");
+    expect(rawLines).toHaveLength(600);
+    const lines = rawLines.map((line) => JSON.parse(line));
+    expect(lines.every((line) => line.decision === "deny")).toBe(true);
+    expect(JSON.stringify(lines)).not.toContain("hunter2");
+  });
+
   it("contains safe-mode startup audit failures and keeps enforcement registered", async () => {
     const { configPath, auditPath } = await fixture(validConfig());
     await mkdir(auditPath);

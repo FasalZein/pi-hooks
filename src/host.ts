@@ -62,7 +62,7 @@ class Host implements HookHost {
   }
 
   async recordSafeMode(reason: string): Promise<void> {
-    await this.audit.write({
+    await this.audit.record({
       timestamp: new Date().toISOString(),
       moduleId: "host",
       eventType: "session_start",
@@ -102,7 +102,6 @@ class Host implements HookHost {
     let reason: string | undefined;
     let mutated = false;
     const contextAdditions: string[] = [];
-    const start = this.audit.records.length;
 
     for (const module of this.modules) {
       if (!module.guard || decision === "deny") continue;
@@ -169,7 +168,7 @@ class Host implements HookHost {
       await this.writeDecision("host", event, context, "host", "allow", undefined, input);
     }
 
-    return { decision, reason, mutated, input, contextAdditions, auditRecords: this.audit.records.slice(start) };
+    return { decision, reason, mutated, input, contextAdditions };
   }
 
   private isSafeMode(): boolean {
@@ -182,7 +181,6 @@ class Host implements HookHost {
     const reason = allow
       ? undefined
       : "Denied by Read-Only Safe Mode: trusted global configuration is invalid and only built-in read-only tools with trusted provenance may run";
-    const start = this.audit.records.length;
     if (!allow) await this.writeDecision("host", event, context, "host", "deny", reason, event.input);
     return {
       decision: allow ? "allow" : "deny",
@@ -190,7 +188,6 @@ class Host implements HookHost {
       mutated: false,
       input: cloneDeep(event.input),
       contextAdditions: [],
-      auditRecords: this.audit.records.slice(start),
     };
   }
 
@@ -221,7 +218,7 @@ class Host implements HookHost {
     reason: string | undefined,
     input: Record<string, unknown>,
   ): Promise<void> {
-    await this.audit.write({
+    await this.audit.record({
       timestamp: new Date().toISOString(),
       sessionId: context.sessionManager?.getSessionId?.() ?? context.sessionManager?.getSessionFile?.(),
       moduleId,
