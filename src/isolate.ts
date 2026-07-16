@@ -75,7 +75,7 @@ function isolatedClone(value: unknown, seen: WeakMap<object, unknown>, lenient: 
     const cloned = structuredClone(value);
     // structuredClone privatizes ordinary storage but aliases SharedArrayBuffer
     // memory nested inside delegated containers; copy those bytes too.
-    privatizeSharedLeaves(cloned, new WeakSet());
+    privatizeSharedLeaves(cloned, new WeakMap());
     seen.set(value, cloned);
     return cloned;
   } catch (error) {
@@ -84,15 +84,26 @@ function isolatedClone(value: unknown, seen: WeakMap<object, unknown>, lenient: 
   }
 }
 
-/** Walk an owned cloned graph in place, replacing shared-memory leaves with private copies. */
-function privatizeSharedLeaves(value: unknown, seen: WeakSet<object>): unknown {
+/**
+ * Walk an owned cloned graph in place, replacing shared-memory leaves with
+ * private copies. Replacements are memoized so a leaf referenced more than
+ * once maps to one private copy, preserving reference identity.
+ */
+function privatizeSharedLeaves(value: unknown, seen: WeakMap<object, unknown>): unknown {
   if (value === null || typeof value !== "object") return value;
-  if (isSharedArrayBuffer(value)) return copySharedBytes(value);
-  if (ArrayBuffer.isView(value)) {
-    return isSharedArrayBuffer(value.buffer) ? privatizeView(value) : value;
+  if (seen.has(value)) return seen.get(value);
+  if (isSharedArrayBuffer(value)) {
+    const copy = copySharedBytes(value);
+    seen.set(value, copy);
+    return copy;
   }
-  if (seen.has(value)) return value;
-  seen.add(value);
+  if (ArrayBuffer.isView(value)) {
+    if (!isSharedArrayBuffer(value.buffer)) return value;
+    const copy = privatizeView(value);
+    seen.set(value, copy);
+    return copy;
+  }
+  seen.set(value, value);
   if (value instanceof Map) {
     for (const [key, nested] of [...value]) {
       const privateKey = privatizeSharedLeaves(key, seen);
@@ -112,9 +123,15 @@ function privatizeSharedLeaves(value: unknown, seen: WeakSet<object>): unknown {
     }
     return value;
   }
-  for (const [key, nested] of Object.entries(value)) {
-    const privateNested = privatizeSharedLeaves(nested, seen);
-    if (privateNested !== nested) (value as Record<string, unknown>)[key] = privateNested;
+  // structuredClone output carries data properties only, but not all are
+  // enumerable (Error.cause, AggregateError.errors) — walk every own property.
+  for (const key of Object.getOwnPropertyNames(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined || !("value" in descriptor)) continue;
+    const privateNested = privatizeSharedLeaves(descriptor.value, seen);
+    if (privateNested !== descriptor.value) {
+      Object.defineProperty(value, key, { ...descriptor, value: privateNested });
+    }
   }
   return value;
 }

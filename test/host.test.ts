@@ -645,6 +645,33 @@ describe("normalized events and compatibility aliases", () => {
 });
 
 describe("isolation primitive contract", () => {
+  it("privatizes shared memory reachable through non-enumerable structured fields like Error.cause", async () => {
+    const { cloneDeep } = await import("../src/isolate.js");
+    const live = new Uint8Array(new SharedArrayBuffer(4));
+    const error = new Error("boom", { cause: live });
+    const cloned = cloneDeep({ error }) as { error: Error };
+    const clonedCause = cloned.error.cause as Uint8Array;
+    expect(clonedCause).toBeInstanceOf(Uint8Array);
+    clonedCause[0] = 7;
+    expect(live[0]).toBe(0);
+  });
+
+  it("preserves repeated-reference identity when privatizing shared leaves in fallback clones", async () => {
+    const { cloneDeep } = await import("../src/isolate.js");
+    const live = new Uint8Array(new SharedArrayBuffer(2));
+    class Wrapper {
+      constructor(
+        public first: Uint8Array,
+        public second: Uint8Array,
+      ) {}
+    }
+    const cloned = cloneDeep(new Wrapper(live, live)) as { first: Uint8Array; second: Uint8Array };
+    expect(cloned.first).toBe(cloned.second);
+    cloned.first[0] = 9;
+    expect(cloned.second[0]).toBe(9);
+    expect(live[0]).toBe(0);
+  });
+
   it("rejects symbols on strict clone paths and drops them on the lenient event view", async () => {
     const { cloneDeep, safeFrozenView } = await import("../src/isolate.js");
     expect(() => cloneDeep({ marker: Symbol("live-handle") })).toThrow();
