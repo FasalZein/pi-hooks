@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tothemoon.dev/schemas/pi-hooks/global-v1.json",
+  "title": "Pi Hooks trusted global configuration v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "modules"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "modules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "enabled": { "type": "boolean", "default": true }
+        }
+      }
+    },
+    "audit": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "includeAllows": { "type": "boolean", "default": false }
+      }
+    }
+  }
+}

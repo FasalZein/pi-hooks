@@ -1,0 +1,241 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { AuditLog } from "./audit.js";
+import { loadGlobalConfig, type GlobalConfig } from "./config.js";
+import { resolveOrder } from "./order.js";
+import type { AuditRecord, DispatchContext, DispatchResult, HookModule, HookPhase, HostStatus, NormalizedEvent } from "./types.js";
+
+const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
+const FINAL_BOUNDARY = "Authoritative only inside this Host tool_call handler; a later Pi extension can still mutate input before execution.";
+
+export interface CreateHookHostOptions {
+  configPath?: string;
+  modules?: readonly HookModule[];
+}
+
+export interface HookHost {
+  dispatch(event: NormalizedEvent, context: DispatchContext): Promise<DispatchResult>;
+  status(): HostStatus;
+}
+
+export async function createHookHost(options: CreateHookHostOptions = {}): Promise<HookHost> {
+  const configPath = options.configPath ?? defaultConfigPath();
+  const available = new Map((options.modules ?? []).map((module) => [module.id, module]));
+  let config: GlobalConfig | undefined;
+  let modules: HookModule[] = [];
+  let phaseOrder = emptyPhaseOrder();
+  let failure: string | undefined;
+
+  try {
+    config = await loadGlobalConfig(configPath);
+    const ids = new Set<string>();
+    const enabled: HookModule[] = [];
+    for (const entry of config.modules) {
+      if (ids.has(entry.id)) throw new Error(`Duplicate configured module id: ${entry.id}`);
+      ids.add(entry.id);
+      if (entry.enabled === false) continue;
+      const module = available.get(entry.id);
+      if (!module) throw new Error(`Configured module is unavailable: ${entry.id}`);
+      enabled.push(module);
+    }
+    ({ modules, phaseOrder } = resolveOrder(enabled));
+  } catch (error) {
+    failure = message(error);
+  }
+
+  const audit = new AuditLog(config?.audit?.path, config?.audit?.includeAllows);
+  const host = new Host(configPath, config, modules, phaseOrder, audit, failure, [...available.values()]);
+  if (failure) await host.recordSafeMode(failure);
+  return host;
+}
+
+class Host implements HookHost {
+  private degraded = false;
+  private lastFailure?: string;
+
+  constructor(
+    private readonly configPath: string,
+    private readonly config: GlobalConfig | undefined,
+    private readonly modules: HookModule[],
+    private readonly phaseOrder: Record<HookPhase, string[]>,
+    private readonly audit: AuditLog,
+    failure: string | undefined,
+    private readonly availableModules: HookModule[],
+  ) {
+    this.lastFailure = failure;
+  }
+
+  async recordSafeMode(reason: string): Promise<void> {
+    await this.audit.write({
+      timestamp: new Date().toISOString(),
+      moduleId: "host",
+      eventType: "session_start",
+      phase: "host",
+      decision: "safe-mode",
+      reason,
+    });
+  }
+
+  status(): HostStatus {
+    const valid = !this.lastFailure || this.config !== undefined && this.modules.length >= 0 && !this.isSafeMode();
+    const configured = this.config?.modules ?? this.availableModules.map((module) => ({ id: module.id, enabled: false }));
+    const enabledIds = new Set(this.modules.map((module) => module.id));
+    const audit = this.audit.status();
+    return {
+      configSource: this.configPath,
+      configHealth: valid ? "valid" : "invalid",
+      ...(this.lastFailure ? { lastFailure: this.lastFailure } : {}),
+      modules: configured.map((entry) => ({
+        id: entry.id,
+        enabled: enabledIds.has(entry.id),
+        required: this.availableModules.find((module) => module.id === entry.id)?.required !== false,
+      })),
+      phaseOrder: this.phaseOrder,
+      mode: this.isSafeMode() ? "read-only-safe" : "normal",
+      health: this.degraded || this.isSafeMode() || audit.health === "degraded" ? "degraded" : "healthy",
+      audit,
+      finalInterceptor: { available: false, boundary: FINAL_BOUNDARY },
+    };
+  }
+
+  async dispatch(event: NormalizedEvent, context: DispatchContext): Promise<DispatchResult> {
+    if (this.isSafeMode()) return this.safeModeDispatch(event, context);
+
+    let input = { ...event.input };
+    let decision: "allow" | "deny" = "allow";
+    let reason: string | undefined;
+    const contextAdditions: string[] = [];
+    const start = this.audit.records.length;
+
+    for (const module of this.modules) {
+      if (!module.guard || decision === "deny") continue;
+      try {
+        const result = await module.guard({ event, input, context });
+        if (result?.decision === "deny") {
+          decision = "deny";
+          reason = result.reason ?? `Denied by ${module.id}`;
+          await this.writeDecision(module.id, event, context, "guard", "deny", reason, input);
+        }
+      } catch (error) {
+        ({ decision, reason } = await this.handleFailure(module, event, context, "guard", error, decision, reason, input));
+      }
+    }
+
+    for (const module of this.modules) {
+      if (!module.transform || decision === "deny") continue;
+      try {
+        const result = await module.transform({ event, input, context });
+        if (result) {
+          input = { ...result.input };
+          await this.writeDecision(module.id, event, context, "transform", "mutate", undefined, input);
+        }
+      } catch (error) {
+        ({ decision, reason } = await this.handleFailure(module, event, context, "transform", error, decision, reason, input));
+      }
+    }
+
+    for (const module of this.modules) {
+      if (!module.internalFinal || decision === "deny") continue;
+      try {
+        const result = await module.internalFinal({ event, input, context });
+        if (result?.decision === "deny") {
+          decision = "deny";
+          reason = result.reason ?? `Denied by ${module.id}`;
+          await this.writeDecision(module.id, event, context, "internal-final", "deny", reason, input);
+        }
+      } catch (error) {
+        ({ decision, reason } = await this.handleFailure(module, event, context, "internal-final", error, decision, reason, input));
+      }
+    }
+
+    for (const module of this.modules) {
+      if (!module.context || decision === "deny") continue;
+      try {
+        const result = await module.context({ event, input, context });
+        if (result) contextAdditions.push(...(typeof result.context === "string" ? [result.context] : result.context));
+      } catch (error) {
+        ({ decision, reason } = await this.handleFailure(module, event, context, "context", error, decision, reason, input));
+      }
+    }
+
+    for (const module of this.modules) {
+      if (!module.observe) continue;
+      try {
+        await module.observe({ event, input, context, decision, reason, contextAdditions });
+      } catch (error) {
+        await this.handleFailure(module, event, context, "observe", error, decision, reason, input);
+      }
+    }
+
+    return { decision, reason, input, contextAdditions, auditRecords: this.audit.records.slice(start) };
+  }
+
+  private isSafeMode(): boolean {
+    return this.config === undefined || this.lastFailure !== undefined && this.modules.length === 0;
+  }
+
+  private async safeModeDispatch(event: NormalizedEvent, context: DispatchContext): Promise<DispatchResult> {
+    const allow = event.type !== "tool_call" || READ_ONLY_TOOLS.has(event.toolName ?? "");
+    const reason = allow ? undefined : "Denied by Read-Only Safe Mode because trusted global configuration is invalid";
+    const start = this.audit.records.length;
+    if (!allow) await this.writeDecision("host", event, context, "host", "deny", reason, event.input);
+    return {
+      decision: allow ? "allow" : "deny",
+      reason,
+      input: { ...event.input },
+      contextAdditions: [],
+      auditRecords: this.audit.records.slice(start),
+    };
+  }
+
+  private async handleFailure(
+    module: HookModule,
+    event: NormalizedEvent,
+    context: DispatchContext,
+    phase: HookPhase,
+    error: unknown,
+    decision: "allow" | "deny",
+    reason: string | undefined,
+    input: Record<string, unknown>,
+  ): Promise<{ decision: "allow" | "deny"; reason?: string }> {
+    const failure = `${module.id} ${phase} failed: ${message(error)}`;
+    this.degraded = true;
+    this.lastFailure = failure;
+    await this.writeDecision(module.id, event, context, phase, "module-failure", failure, input);
+    if (phase !== "observe" && module.required !== false) return { decision: "deny", reason: failure };
+    return { decision, reason };
+  }
+
+  private async writeDecision(
+    moduleId: string,
+    event: NormalizedEvent,
+    context: DispatchContext,
+    phase: HookPhase | "host",
+    decision: AuditRecord["decision"],
+    reason: string | undefined,
+    input: Record<string, unknown>,
+  ): Promise<void> {
+    await this.audit.write({
+      timestamp: new Date().toISOString(),
+      sessionId: context.sessionManager?.getSessionId?.() ?? context.sessionManager?.getSessionFile?.(),
+      moduleId,
+      eventType: event.type,
+      phase,
+      decision,
+      ...(reason ? { reason } : {}),
+      inputSummary: input,
+    });
+  }
+}
+
+function defaultConfigPath(): string {
+  return join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), "pi-hooks.jsonc");
+}
+
+function emptyPhaseOrder(): Record<HookPhase, string[]> {
+  return { guard: [], transform: [], "internal-final": [], context: [], observe: [] };
+}
+
+function message(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
