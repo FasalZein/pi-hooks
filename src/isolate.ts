@@ -30,7 +30,7 @@ export function safeFrozenView<T>(value: T): T {
 
 function isolatedClone(value: unknown, seen: WeakMap<object, unknown>, lenient: boolean): unknown {
   if (value === null || typeof value !== "object") {
-    if (typeof value !== "function") return value;
+    if (typeof value !== "function" && typeof value !== "symbol") return value;
     if (lenient) return undefined;
     return structuredClone(value); // throws DataCloneError, matching strict clone semantics
   }
@@ -59,14 +59,64 @@ function isolatedClone(value: unknown, seen: WeakMap<object, unknown>, lenient: 
     for (const [key, nested] of Object.entries(value)) out[key] = isolatedClone(nested, seen, lenient);
     return out;
   }
+  if (value instanceof Map) {
+    const out = new Map<unknown, unknown>();
+    seen.set(value, out);
+    for (const [key, nested] of value) out.set(isolatedClone(key, seen, lenient), isolatedClone(nested, seen, lenient));
+    return out;
+  }
+  if (value instanceof Set) {
+    const out = new Set<unknown>();
+    seen.set(value, out);
+    for (const item of value) out.add(isolatedClone(item, seen, lenient));
+    return out;
+  }
   try {
     const cloned = structuredClone(value);
+    // structuredClone privatizes ordinary storage but aliases SharedArrayBuffer
+    // memory nested inside delegated containers; copy those bytes too.
+    privatizeSharedLeaves(cloned, new WeakSet());
     seen.set(value, cloned);
     return cloned;
   } catch (error) {
     if (lenient) return undefined;
     throw error;
   }
+}
+
+/** Walk an owned cloned graph in place, replacing shared-memory leaves with private copies. */
+function privatizeSharedLeaves(value: unknown, seen: WeakSet<object>): unknown {
+  if (value === null || typeof value !== "object") return value;
+  if (isSharedArrayBuffer(value)) return copySharedBytes(value);
+  if (ArrayBuffer.isView(value)) {
+    return isSharedArrayBuffer(value.buffer) ? privatizeView(value) : value;
+  }
+  if (seen.has(value)) return value;
+  seen.add(value);
+  if (value instanceof Map) {
+    for (const [key, nested] of [...value]) {
+      const privateKey = privatizeSharedLeaves(key, seen);
+      const privateNested = privatizeSharedLeaves(nested, seen);
+      if (privateKey !== key) value.delete(key);
+      value.set(privateKey, privateNested);
+    }
+    return value;
+  }
+  if (value instanceof Set) {
+    for (const item of [...value]) {
+      const privateItem = privatizeSharedLeaves(item, seen);
+      if (privateItem !== item) {
+        value.delete(item);
+        value.add(privateItem);
+      }
+    }
+    return value;
+  }
+  for (const [key, nested] of Object.entries(value)) {
+    const privateNested = privatizeSharedLeaves(nested, seen);
+    if (privateNested !== nested) (value as Record<string, unknown>)[key] = privateNested;
+  }
+  return value;
 }
 
 function isSharedArrayBuffer(value: object): value is SharedArrayBuffer {

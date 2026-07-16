@@ -643,3 +643,13 @@ describe("normalized events and compatibility aliases", () => {
     expect(normalizeEvent(source, { toolName: "bash", toolInput: {}, isError: source === "PostToolUseFailure" }).type).toBe(expected);
   });
 });
+
+describe("isolation primitive contract", () => {
+  it("rejects symbols on strict clone paths and drops them on the lenient event view", async () => {
+    const { cloneDeep, safeFrozenView } = await import("../src/isolate.js");
+    expect(() => cloneDeep({ marker: Symbol("live-handle") })).toThrow();
+    const view = safeFrozenView({ marker: Symbol("live-handle"), kept: "value" } as Record<string, unknown>);
+    expect(view.marker).toBeUndefined();
+    expect(view.kept).toBe("value");
+  });
+});

@@ -629,9 +629,13 @@ export default createPiHooksExtension({
       },
     },
     tool_result: {
-      observe: ({ event }: { event: { payload: { details: { shared: Uint8Array } } } }) => {
+      observe: ({ event }: { event: { payload: { details: { shared?: Uint8Array; container?: Map<string, Uint8Array> } } } }) => {
         try {
-          event.payload.details.shared[0] = 99;
+          if (event.payload.details.shared) event.payload.details.shared[0] = 99;
+        } catch {}
+        try {
+          const nested = event.payload.details.container?.get("shared");
+          if (nested) nested[0] = 77;
         } catch {}
       },
     },
@@ -666,6 +670,20 @@ describe("real Pi adapter: shared-memory payloads stay private", () => {
           isError: false,
         } as never);
         expect(resultShared[0]).toBe(1);
+
+        // Shared memory nested inside a delegated container (Map) must also stay private.
+        const mapShared = new Uint8Array(new SharedArrayBuffer(2));
+        mapShared[0] = 1;
+        await session.extensionRunner!.emitToolResult({
+          type: "tool_result",
+          toolName: "custom-shm",
+          toolCallId: "shm-map-result",
+          input: { anything: true },
+          content: [{ type: "text", text: "shm map original" }],
+          details: { container: new Map([["shared", mapShared]]) },
+          isError: false,
+        } as never);
+        expect(mapShared[0]).toBe(1);
       },
     );
   }, 30_000);
