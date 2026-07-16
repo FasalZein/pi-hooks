@@ -276,6 +276,26 @@ export default createPiHooksExtension({
       },
     },
     {
+      id: "mapper2",
+      after: ["mapper"],
+      tool_result: {
+        patch: ({ result }: { result: { content?: Array<{ type: string; text?: string }> } }) => ({
+          content: [
+            ...(result.content ?? []),
+            { type: "text", text: "second-patch saw: " + (result.content?.[0]?.text ?? "nothing") },
+          ],
+        }),
+      },
+      context: {
+        transform: ({ input }: { input: { messages: unknown[] } }) => ({
+          messages: [
+            ...input.messages,
+            { role: "user", content: [{ type: "text", text: "appended-by-second" }], timestamp: Date.now() },
+          ],
+        }),
+      },
+    },
+    {
       id: "rewriter",
       tool_call: {
         transform: ({ input }: { input: Record<string, unknown> }) =>
@@ -295,7 +315,7 @@ export default createPiHooksExtension({
 
 const mapperConfig = JSON.stringify({
   schemaVersion: 1,
-  modules: [{ id: "mapper", enabled: true }, { id: "rewriter", enabled: true }],
+  modules: [{ id: "mapper", enabled: true }, { id: "mapper2", enabled: true }, { id: "rewriter", enabled: true }],
 });
 
 describe("real Pi adapter: effect-bearing event mappings", () => {
@@ -337,7 +357,7 @@ describe("real Pi adapter: effect-bearing event mappings", () => {
     );
   }, 30_000);
 
-  it("applies a chained partial tool_result patch through Pi", async () => {
+  it("applies a chained partial tool_result patch through Pi with module-to-module composition", async () => {
     await withLoadedSession(
       { config: mapperConfig, extraExtensionSource: effectMapperExtension(), skipHooksExtension: true },
       async (session) => {
@@ -351,7 +371,11 @@ describe("real Pi adapter: effect-bearing event mappings", () => {
           isError: false,
         } as never);
         expect(result).toBeDefined();
-        expect((result as { content: Array<{ text: string }> }).content).toEqual([{ type: "text", text: "patched result" }]);
+        // The second module's patch must observe the first module's output.
+        expect((result as { content: Array<{ text: string }> }).content).toEqual([
+          { type: "text", text: "patched result" },
+          { type: "text", text: "second-patch saw: patched result" },
+        ]);
       },
     );
   }, 30_000);
@@ -366,8 +390,16 @@ describe("real Pi adapter: effect-bearing event mappings", () => {
         const first = await session.extensionRunner!.emitContext([{ role: "user", content: "original" }] as never);
         const firstText = JSON.stringify(first);
         expect(firstText).toContain("original");
+        // Module-to-module composition: the second module saw the first module's replacement.
         expect(firstText).toContain("appended-by-module");
+        expect(firstText).toContain("appended-by-second");
+        expect(firstText.indexOf("appended-by-module")).toBeLessThan(firstText.indexOf("appended-by-second"));
         expect(firstText).toContain("tool-call-hint");
+        // The drained queued-context message is a well-formed Pi user message.
+        const drained = (first as Array<{ role?: string; content?: unknown; timestamp?: unknown }>)
+          .find((message) => JSON.stringify(message.content ?? "").includes("tool-call-hint"));
+        expect(drained).toMatchObject({ role: "user" });
+        expect(typeof drained?.timestamp).toBe("number");
 
         const second = await session.extensionRunner!.emitContext([{ role: "user", content: "original" }] as never);
         const secondText = JSON.stringify(second);
@@ -375,5 +407,79 @@ describe("real Pi adapter: effect-bearing event mappings", () => {
         expect(secondText).not.toContain("tool-call-hint");
       },
     );
+  }, 30_000);
+});
+
+function payloadEscapeExtension(): string {
+  return `
+import { createPiHooksExtension } from ${JSON.stringify(hooksExtensionPath)};
+
+export default createPiHooksExtension({
+  modules: [{
+    id: "escape",
+    tool_call: {
+      context: ({ event }: { event: { payload: { input: { nested: { value: string } } } } }) => {
+        try {
+          event.payload.input.nested.value = "mutated-via-context-handler";
+        } catch {}
+        return { context: "declared-hint" };
+      },
+      observe: (invocation: { event: { payload: { input: { nested: { value: string } } } }; contextAdditions: string[] }) => {
+        try {
+          invocation.event.payload.input.nested.value = "mutated-via-observe-handler";
+        } catch {}
+        try {
+          invocation.contextAdditions.push("smuggled-context");
+        } catch {}
+      },
+    },
+  }],
+});
+`;
+}
+
+describe("real Pi adapter: module event views cannot reach live Pi state", () => {
+  it("keeps handler mutation of the normalized event payload and contextAdditions away from Pi", async () => {
+    const config = JSON.stringify({ schemaVersion: 1, modules: [{ id: "escape", enabled: true }] });
+    await withLoadedSession(
+      { config, extraExtensionSource: payloadEscapeExtension(), skipHooksExtension: true },
+      async (session) => {
+        const event = {
+          type: "tool_call",
+          toolName: "bash",
+          toolCallId: "escape",
+          input: { command: "echo hi", nested: { value: "original" } },
+        };
+        const result = await session.extensionRunner!.emitToolCall(event as never);
+        expect(result).toBeUndefined();
+        // Neither the context handler nor the observe handler reached Pi's live input.
+        expect(event.input.nested.value).toBe("original");
+
+        // Only the declared context effect reaches the next real context event.
+        const messages = await session.extensionRunner!.emitContext([{ role: "user", content: "original" }] as never);
+        const text = JSON.stringify(messages);
+        expect(text).toContain("declared-hint");
+        expect(text).not.toContain("smuggled-context");
+      },
+    );
+  }, 30_000);
+});
+
+describe("real Pi adapter: active-tool provenance", () => {
+  it("denies a built-in read-only tool in safe mode when the tool is not active", async () => {
+    await withLoadedSession({ config: invalidConfig }, async (session) => {
+      session.setActiveToolsByName(["bash"]);
+      expect(session.getAllTools().find((tool) => tool.name === "read")?.sourceInfo.source).toBe("builtin");
+
+      const result = await session.extensionRunner!.emitToolCall({
+        type: "tool_call",
+        toolName: "read",
+        toolCallId: "inactive-read",
+        input: { path: "/tmp/does-not-matter.txt" },
+      } as never);
+
+      // Provenance requires the active tool set, not getAllTools membership alone.
+      expect(result).toMatchObject({ block: true, reason: expect.stringContaining("Read-Only Safe Mode") });
+    });
   }, 30_000);
 });

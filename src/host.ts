@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { AuditLog } from "./audit.js";
-import { cloneDeep, frozenView } from "./isolate.js";
+import { cloneDeep, frozenView, safeFrozenView } from "./isolate.js";
 import { loadGlobalConfig, type GlobalConfig } from "./config.js";
 import { preparePolicy } from "./policy.js";
 import type {
@@ -17,6 +17,8 @@ import type {
   InputDispatchResult,
   NormalizedEvent,
   ObserveInvocation,
+  PiContextMessages,
+  PiInputImages,
   ObserveOnlyEventType,
   ToolCallDispatchResult,
   ToolResultDispatchResult,
@@ -73,6 +75,8 @@ class Host implements HookHost {
   private readonly configFailure?: string;
   /** Queued module context effects, drained exactly once on the next real context event. */
   private readonly queuedContext: string[] = [];
+  /** Per-event frozen views handed to modules; never the live normalized event. */
+  private readonly eventViews = new WeakMap<NormalizedEvent, NormalizedEvent>();
 
   constructor(
     private readonly configPath: string,
@@ -143,7 +147,7 @@ class Host implements HookHost {
     const input = cloneDeep(event.input);
     const state: PhaseState = { decision: "allow" };
     let mutated = false;
-    let images: unknown[] | undefined;
+    let images: PiInputImages | undefined;
 
     await this.runPhase(
       "guard", event, context, state, input,
@@ -237,7 +241,7 @@ class Host implements HookHost {
     let patched = false;
     const contextAdditions: string[] = [];
     const current = (): ToolResultPatch => ({
-      content: patch.content !== undefined ? patch.content : event.payload.content,
+      content: patch.content !== undefined ? patch.content : event.payload.content as ToolResultPatch["content"],
       details: patch.details !== undefined ? patch.details : event.payload.details,
       isError: patch.isError !== undefined ? patch.isError : event.isError,
     });
@@ -276,7 +280,7 @@ class Host implements HookHost {
   }
 
   private async dispatchContext(event: NormalizedEvent, context: DispatchContext): Promise<ContextDispatchResult> {
-    let messages = cloneDeep(Array.isArray(event.input.messages) ? event.input.messages : []);
+    let messages = cloneDeep(Array.isArray(event.input.messages) ? event.input.messages : []) as PiContextMessages;
     const state: PhaseState = { decision: "allow" };
     let mutated = false;
 
@@ -331,7 +335,7 @@ class Host implements HookHost {
       const currentInput = typeof input === "function" ? input() : input;
       try {
         const invocation = {
-          event,
+          event: this.eventView(event),
           input: frozenView(currentInput),
           context,
           ...(extras?.() ?? {}),
@@ -361,8 +365,18 @@ class Host implements HookHost {
       "observe", event, context, state, input,
       (module) => observeHandlerOf(module, event.type),
       () => undefined,
-      () => ({ decision: state.decision, reason: state.reason, contextAdditions }),
+      () => ({ decision: state.decision, reason: state.reason, contextAdditions: frozenView([...contextAdditions]) }),
     );
+  }
+
+  /** Module-visible frozen event view, built once per dispatched event. */
+  private eventView(event: NormalizedEvent): NormalizedEvent {
+    let view = this.eventViews.get(event);
+    if (!view) {
+      view = safeFrozenView(event);
+      this.eventViews.set(event, view);
+    }
+    return view;
   }
 
   private async terminalAllow(

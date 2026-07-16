@@ -28,7 +28,7 @@ const effectBearing: HookModule = {
     observe: () => undefined,
   },
   context: {
-    transform: () => ({ messages: [] }),
+    transform: () => ({ messages: [{ role: "user", content: "hidden", timestamp: Date.now() }] }),
     observe: () => undefined,
   },
 };
@@ -84,6 +84,24 @@ const contextRejectsForeignEffects: HookModule = {
   context: { guard: () => ({ decision: "deny" as const }) },
 };
 
+const inputRejectsMalformedImages: HookModule = {
+  id: "input-exact-images",
+  // @ts-expect-error images must be Pi ImageContent values, not arbitrary objects
+  input: { transform: () => ({ text: "x", images: [{ nope: true }] }) },
+};
+
+const toolResultRejectsMalformedContent: HookModule = {
+  id: "tool-result-exact-content",
+  // @ts-expect-error content must be Pi (TextContent | ImageContent)[], not a string
+  tool_result: { patch: () => ({ content: "not-an-array" }) },
+};
+
+const contextRejectsMalformedMessages: HookModule = {
+  id: "context-exact-messages",
+  // @ts-expect-error messages must be Pi AgentMessage values (role/content/timestamp), not bare objects
+  context: { transform: () => ({ messages: [{ role: "user" }] }) },
+};
+
 describe("event-keyed HookModule contract", () => {
   it("accepts exactly the per-event effects Pi 0.80.7 consumes", () => {
     const modules = [
@@ -96,7 +114,10 @@ describe("event-keyed HookModule contract", () => {
       sessionCompactRejectsEffects,
       inputRejectsForeignEffects,
       contextRejectsForeignEffects,
+      inputRejectsMalformedImages,
+      toolResultRejectsMalformedContent,
+      contextRejectsMalformedMessages,
     ];
-    expect(modules.map((module) => module.id)).toHaveLength(9);
+    expect(modules.map((module) => module.id)).toHaveLength(12);
   });
 });

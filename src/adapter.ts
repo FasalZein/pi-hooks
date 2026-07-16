@@ -1,4 +1,4 @@
-import type { ExtensionAPI, InputEventResult } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { normalizeEvent } from "./events.js";
 import { createHookHost, type CreateHookHostOptions } from "./host.js";
 import type { DispatchContext } from "./types.js";
@@ -18,10 +18,10 @@ export function createPiHooksExtension(options: CreateHookHostOptions = {}) {
       if (result.decision === "deny") return { action: "handled" as const };
       if (result.mutated && result.text !== undefined) {
         return {
-          action: "transform",
+          action: "transform" as const,
           text: result.text,
           ...(result.images !== undefined ? { images: result.images } : {}),
-        } as InputEventResult;
+        };
       }
     });
 
@@ -37,18 +37,20 @@ export function createPiHooksExtension(options: CreateHookHostOptions = {}) {
     pi.on("tool_result", async (event, ctx) => {
       const result = await host.dispatch(normalizeEvent("tool_result", record(event)), ctx as DispatchContext);
       if (result.event !== "tool_result") return;
-      // Host patch fields are Pi's exact partial tool_result shape; the SDK does not re-export ToolResultEventResult.
-      if (result.patch) return result.patch as never;
+      if (result.patch) return result.patch;
     });
 
     pi.on("context", async (event, ctx) => {
       const result = await host.dispatch(normalizeEvent("context", record(event)), ctx as DispatchContext);
       if (result.event !== "context") return;
-      const queued = result.queuedContext.map((text) => ({ role: "user" as const, content: [{ type: "text" as const, text }] }));
+      const queued = result.queuedContext.map((text) => ({
+        role: "user" as const,
+        content: [{ type: "text" as const, text }],
+        timestamp: Date.now(),
+      }));
       if (result.messages === undefined && queued.length === 0) return;
-      const base = result.messages ?? (event as { messages: unknown[] }).messages;
-      // Host messages are Pi's exact context replacement shape; the SDK does not re-export ContextEventResult.
-      return { messages: [...base, ...queued] } as never;
+      const base = result.messages ?? event.messages;
+      return { messages: [...base, ...queued] };
     });
 
     pi.on("agent_end", async (event, ctx) => {
@@ -82,6 +84,9 @@ export function createPiHooksExtension(options: CreateHookHostOptions = {}) {
 
 function resolveProvenance(pi: ExtensionAPI, toolName: string | undefined): { source: string; path?: string } | undefined {
   if (!toolName) return undefined;
+  // Trust requires the *active* tool set: getAllTools membership alone is not
+  // provenance for a tool Pi would not currently execute.
+  if (!pi.getActiveTools().includes(toolName)) return undefined;
   const active = pi.getAllTools().find((tool) => tool.name === toolName);
   return active ? { source: active.sourceInfo.source, path: active.sourceInfo.path } : undefined;
 }

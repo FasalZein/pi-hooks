@@ -1,3 +1,10 @@
+import type { ContextEvent, InputEventResult, ToolResultEvent } from "@earendil-works/pi-coding-agent";
+
+/** Pi's exact payload types, derived from the public SDK surface. */
+export type PiInputImages = NonNullable<Extract<InputEventResult, { action: "transform" }>["images"]>;
+export type PiToolResultContent = ToolResultEvent["content"];
+export type PiContextMessages = ContextEvent["messages"];
+
 export const PHASES = ["guard", "transform", "internal-final", "context", "observe"] as const;
 export type HookPhase = (typeof PHASES)[number];
 export type HookDecision = "allow" | "deny";
@@ -65,7 +72,7 @@ export interface GuardResult {
 /** Pi input transform: full text replacement; omitted images preserve Pi's prior images. */
 export interface InputTransformResult {
   text: string;
-  images?: unknown[];
+  images?: PiInputImages;
 }
 
 /** Pi tool_call transform: a full input replacement, never a patch. */
@@ -75,14 +82,14 @@ export interface ToolCallTransformResult {
 
 /** Pi tool_result effect: a partial patch of content/details/isError. */
 export interface ToolResultPatch {
-  content?: unknown;
+  content?: PiToolResultContent;
   details?: unknown;
   isError?: boolean;
 }
 
 /** Pi context effect: full message-list replacement. */
 export interface ContextTransformResult {
-  messages: unknown[];
+  messages: PiContextMessages;
 }
 
 export interface ContextAdditionResult {
@@ -161,7 +168,7 @@ export interface InputDispatchResult extends DispatchBase {
   mutated: boolean;
   text?: string;
   /** Omitted unless a module supplied replacement images; Pi preserves prior images. */
-  images?: unknown[];
+  images?: PiInputImages;
 }
 
 export interface ToolCallDispatchResult extends DispatchBase {
@@ -182,7 +189,7 @@ export interface ToolResultDispatchResult extends DispatchBase {
 export interface ContextDispatchResult extends DispatchBase {
   event: "context";
   /** Replacement message list, present only when a module transform produced one. */
-  messages?: unknown[];
+  messages?: PiContextMessages;
   /** Queued tool context drained exactly once into this real context event. */
   queuedContext: readonly string[];
 }

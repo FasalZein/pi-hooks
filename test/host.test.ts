@@ -41,6 +41,7 @@ function fakePi() {
       },
       registerTool() { registrations.push("tool"); },
       getAllTools() { return []; },
+      getActiveTools() { return []; },
     },
     handlers,
     commands,
