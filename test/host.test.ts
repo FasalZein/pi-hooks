@@ -418,6 +418,23 @@ describe("configuration, safe mode, audit, and status", () => {
     expect(host.status()).toMatchObject({ configuration: { health: "valid" }, runtime: { health: "degraded" } });
   });
 
+  it("never blocks on observe failures: a required module's observe throw leaves the action allowed", async () => {
+    const { configPath } = await fixture(validConfig(["watcher"]));
+    const host = await createHookHost({
+      configPath,
+      modules: [{ id: "watcher", tool_call: { observe: () => { throw new Error("observer exploded"); } } }],
+    });
+    const result = await host.dispatch(normalizeEvent("tool_call", {
+      toolName: "bash",
+      toolCallId: "obs",
+      input: { command: "echo hi" },
+    }), ctx as never);
+    expect(result.decision).toBe("allow");
+    expect(host.status()).toMatchObject({
+      runtime: { health: "degraded", lastFailure: expect.stringContaining("watcher observe failed") },
+    });
+  });
+
   it("minimizes and bounds audit records containing embedded secrets", async () => {
     const secrets = ["bearer-secret", "query-token", "url-password", "error-password", "input-token"];
     const module: HookModule = {

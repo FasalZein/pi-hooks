@@ -16,6 +16,7 @@ import type {
   HostStatus,
   InputDispatchResult,
   NormalizedEvent,
+  ObserveInvocation,
   ObserveOnlyEventType,
   ToolCallDispatchResult,
   ToolResultDispatchResult,
@@ -251,7 +252,7 @@ class Host implements HookHost {
         patched = true;
         await this.writeDecision(moduleId, event, context, "transform", "mutate", undefined, input);
       },
-      () => frozenView(current()),
+      () => ({ result: frozenView(current()) }),
     );
     await this.runPhase(
       "context", event, context, state, input,
@@ -259,7 +260,7 @@ class Host implements HookHost {
       (moduleId, result) => {
         contextAdditions.push(...(typeof result.context === "string" ? [result.context] : result.context));
       },
-      () => frozenView(current()),
+      () => ({ result: frozenView(current()) }),
     );
     await this.observePhase(event, context, state, input, contextAdditions);
     if (state.decision === "allow") this.queuedContext.push(...contextAdditions);
@@ -313,15 +314,15 @@ class Host implements HookHost {
    * degrade runtime health only, required-module failures deny pre-execution,
    * and observe failures never block.
    */
-  private async runPhase<R>(
+  private async runPhase<R, I extends HookInvocation = HookInvocation>(
     phase: HookPhase,
     event: NormalizedEvent,
     context: DispatchContext,
     state: PhaseState,
     input: Record<string, unknown> | (() => Record<string, unknown>),
-    select: (module: HookModule) => ((invocation: HookInvocation) => void | R | Promise<void | R>) | undefined,
+    select: (module: HookModule) => ((invocation: I) => void | R | Promise<void | R>) | undefined,
     apply: (moduleId: string, result: R) => void | Promise<void>,
-    resultView?: () => Readonly<ToolResultPatch>,
+    extras?: () => Partial<I>,
   ): Promise<void> {
     for (const module of this.modules) {
       const handler = select(module);
@@ -329,12 +330,12 @@ class Host implements HookHost {
       if (phase !== "observe" && state.decision === "deny") continue;
       const currentInput = typeof input === "function" ? input() : input;
       try {
-        const invocation: HookInvocation = {
+        const invocation = {
           event,
           input: frozenView(currentInput),
           context,
-          ...(resultView ? { result: resultView() } : {}),
-        };
+          ...(extras?.() ?? {}),
+        } as I;
         const result = await handler(invocation);
         if (result !== undefined && result !== null) await apply(module.id, result as R);
       } catch (error) {
@@ -356,24 +357,12 @@ class Host implements HookHost {
     input: Record<string, unknown>,
     contextAdditions: readonly string[],
   ): Promise<void> {
-    for (const module of this.modules) {
-      const handler = observeHandlerOf(module, event.type);
-      if (!handler) continue;
-      try {
-        await handler({
-          event,
-          input: frozenView(input),
-          context,
-          decision: state.decision,
-          reason: state.reason,
-          contextAdditions,
-        });
-      } catch (error) {
-        const failure = `${module.id} observe failed: ${message(error)}`;
-        this.runtimeFailure = failure;
-        await this.writeDecision(module.id, event, context, "observe", "module-failure", failure, input);
-      }
-    }
+    await this.runPhase<void, ObserveInvocation>(
+      "observe", event, context, state, input,
+      (module) => observeHandlerOf(module, event.type),
+      () => undefined,
+      () => ({ decision: state.decision, reason: state.reason, contextAdditions }),
+    );
   }
 
   private async terminalAllow(
