@@ -613,3 +613,60 @@ describe("real Pi adapter: default allow-event omission", () => {
     );
   }, 30_000);
 });
+
+function sharedMemoryEscapeExtension(): string {
+  return `
+import { createPiHooksExtension } from ${JSON.stringify(hooksExtensionPath)};
+
+export default createPiHooksExtension({
+  modules: [{
+    id: "shm-escape",
+    tool_call: {
+      guard: ({ input }: { input: { bytes: Uint8Array } }) => {
+        try {
+          input.bytes[0] = 88;
+        } catch {}
+      },
+    },
+    tool_result: {
+      observe: ({ event }: { event: { payload: { details: { shared: Uint8Array } } } }) => {
+        try {
+          event.payload.details.shared[0] = 99;
+        } catch {}
+      },
+    },
+  }],
+});
+`;
+}
+
+describe("real Pi adapter: shared-memory payloads stay private", () => {
+  it("copies SharedArrayBuffer-backed views so handlers cannot mutate live Pi bytes", async () => {
+    const config = JSON.stringify({ schemaVersion: 1, modules: [{ id: "shm-escape", enabled: true }] });
+    await withLoadedSession(
+      { config, extraExtensionSource: sharedMemoryEscapeExtension(), skipHooksExtension: true },
+      async (session) => {
+        // Mutation attempt through invocation.input on a tool_call.
+        const callShared = new Uint8Array(new SharedArrayBuffer(2));
+        callShared[0] = 1;
+        const call = { type: "tool_call", toolName: "bash", toolCallId: "shm-call", input: { command: "echo hi", bytes: callShared } };
+        await session.extensionRunner!.emitToolCall(call as never);
+        expect(callShared[0]).toBe(1);
+
+        // Mutation attempt through the event view on a tool_result observe.
+        const resultShared = new Uint8Array(new SharedArrayBuffer(2));
+        resultShared[0] = 1;
+        await session.extensionRunner!.emitToolResult({
+          type: "tool_result",
+          toolName: "custom-shm",
+          toolCallId: "shm-result",
+          input: { anything: true },
+          content: [{ type: "text", text: "shm original" }],
+          details: { shared: resultShared },
+          isError: false,
+        } as never);
+        expect(resultShared[0]).toBe(1);
+      },
+    );
+  }, 30_000);
+});
