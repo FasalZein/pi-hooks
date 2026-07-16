@@ -526,3 +526,90 @@ describe("real Pi adapter: active-tool provenance", () => {
     });
   }, 30_000);
 });
+
+function duplicateIdExtension(): string {
+  return `
+import { createPiHooksExtension } from ${JSON.stringify(hooksExtensionPath)};
+
+export default createPiHooksExtension({
+  modules: [
+    { id: "twin", tool_call: { guard: () => undefined } },
+    { id: "twin", tool_call: { internalFinal: () => ({ decision: "deny", reason: "impostor" }) } },
+  ],
+});
+`;
+}
+
+describe("real Pi adapter: effective-policy preparation failures", () => {
+  it("rejects duplicate available module ids and enters safe mode at the tool_call boundary", async () => {
+    const config = JSON.stringify({ schemaVersion: 1, modules: [{ id: "twin", enabled: true }] });
+    await withLoadedSession(
+      { config, extraExtensionSource: duplicateIdExtension(), skipHooksExtension: true },
+      async (session) => {
+        const result = await session.extensionRunner!.emitToolCall({
+          type: "tool_call",
+          toolName: "write",
+          toolCallId: "dup-e2e",
+          input: { path: "/tmp/x", content: "y" },
+        } as never);
+        expect(result).toMatchObject({ block: true, reason: expect.stringContaining("Read-Only Safe Mode") });
+      },
+    );
+  }, 30_000);
+
+  it("degrades on a missing optional module but enters safe mode on a missing required module", async () => {
+    const optionalMissing = JSON.stringify({
+      schemaVersion: 1,
+      modules: [{ id: "benign", enabled: true }, { id: "ghost", enabled: true, required: false }],
+    });
+    await withLoadedSession(
+      { config: optionalMissing, extraExtensionSource: benignModuleExtension(), skipHooksExtension: true },
+      async (session) => {
+        const allowed = await session.extensionRunner!.emitToolCall({
+          type: "tool_call",
+          toolName: "bash",
+          toolCallId: "opt-e2e",
+          input: { command: "echo hi" },
+        } as never);
+        expect(allowed).toBeUndefined();
+      },
+    );
+
+    const requiredMissing = JSON.stringify({ schemaVersion: 1, modules: [{ id: "ghost", enabled: true }] });
+    await withLoadedSession({ config: requiredMissing }, async (session) => {
+      const denied = await session.extensionRunner!.emitToolCall({
+        type: "tool_call",
+        toolName: "write",
+        toolCallId: "req-e2e",
+        input: { path: "/tmp/x", content: "y" },
+      } as never);
+      expect(denied).toMatchObject({ block: true, reason: expect.stringContaining("Read-Only Safe Mode") });
+    });
+  }, 30_000);
+});
+
+describe("real Pi adapter: default allow-event omission", () => {
+  it("omits ordinary allows from persisted audit when includeAllows is false", async () => {
+    const auditDir = await mkdtemp(join(tmpdir(), "pi-hooks-noallow-audit-"));
+    const auditPath = join(auditDir, "audit.jsonl");
+    const config = JSON.stringify({
+      schemaVersion: 1,
+      modules: [{ id: "benign", enabled: true }],
+      audit: { path: auditPath },
+    });
+    await withLoadedSession(
+      { config, extraExtensionSource: benignModuleExtension(), skipHooksExtension: true },
+      async (session) => {
+        const result = await session.extensionRunner!.emitToolCall({
+          type: "tool_call",
+          toolName: "bash",
+          toolCallId: "no-allow",
+          input: { command: "echo hi" },
+        } as never);
+        expect(result).toBeUndefined();
+        const persisted = await readFile(auditPath, "utf8").catch(() => "");
+        expect(persisted).not.toContain('"decision":"allow"');
+      },
+    );
+  }, 30_000);
+});
