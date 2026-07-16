@@ -7,6 +7,7 @@ import { preparePolicy } from "./policy.js";
 import type { AuditRecord, DispatchContext, DispatchResult, HookModule, HookPhase, HostStatus, NormalizedEvent } from "./types.js";
 
 const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
+const EFFECT_BEARING = new Set<NormalizedEvent["type"]>(["input", "tool_call", "tool_result"]);
 const FINAL_BOUNDARY = "Authoritative only inside this Host tool_call handler; a later Pi extension can still mutate input before execution.";
 
 export interface CreateHookHostOptions {
@@ -162,6 +163,10 @@ class Host implements HookHost {
       } catch (error) {
         await this.handleFailure(module, event, context, "observe", error, decision, reason, input);
       }
+    }
+
+    if (decision === "allow" && EFFECT_BEARING.has(event.type)) {
+      await this.writeDecision("host", event, context, "host", "allow", undefined, input);
     }
 
     return { decision, reason, mutated, input, contextAdditions, auditRecords: this.audit.records.slice(start) };

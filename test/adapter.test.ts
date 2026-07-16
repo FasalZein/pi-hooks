@@ -158,6 +158,49 @@ describe("real Pi adapter: optional module failure semantics", () => {
   }, 30_000);
 });
 
+function benignModuleExtension(): string {
+  return `
+import { createPiHooksExtension } from ${JSON.stringify(hooksExtensionPath)};
+
+export default createPiHooksExtension({
+  modules: [{
+    id: "benign",
+    guard: () => undefined,
+    observe: () => undefined,
+  }],
+});
+`;
+}
+
+describe("real Pi adapter: terminal allow auditing", () => {
+  it("emits exactly one terminal allow record when audit.includeAllows is true", async () => {
+    const auditDir = await mkdtemp(join(tmpdir(), "pi-hooks-allow-audit-"));
+    const auditPath = join(auditDir, "audit.jsonl");
+    const config = JSON.stringify({
+      schemaVersion: 1,
+      modules: [{ id: "benign", enabled: true }],
+      audit: { path: auditPath, includeAllows: true },
+    });
+    await withLoadedSession(
+      { config, extraExtensionSource: benignModuleExtension(), skipHooksExtension: true },
+      async (session) => {
+        const result = await session.extensionRunner!.emitToolCall({
+          type: "tool_call",
+          toolName: "bash",
+          toolCallId: "allowed",
+          input: { command: "echo hi" },
+        } as never);
+
+        expect(result).toBeUndefined();
+        const lines = (await readFile(auditPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+        const allows = lines.filter((line) => line.decision === "allow");
+        expect(allows).toHaveLength(1);
+        expect(allows[0]).toMatchObject({ moduleId: "host", phase: "host", eventType: "tool_call" });
+      },
+    );
+  }, 30_000);
+});
+
 describe("real Pi adapter: Read-Only Safe Mode provenance", () => {
   it("denies a same-name extension read override in safe mode and never executes it", async () => {
     const markerPath = join(await mkdtemp(join(tmpdir(), "pi-hooks-marker-")), "executed.txt");
