@@ -30,7 +30,7 @@ The Host applies blocks and argument mutations through Pi's public `tool_call` e
 
 The Host itself registers no model-visible tool and injects no model prompt. A trusted Capability Provider granted `tools` **does** register model-visible tools, and one granted `commands` registers slash commands — both by explicit grant in trusted global configuration only.
 
-**Process grant is not tool_call-gated.** A provider granted `process` runs child processes with the Pi process's own OS permissions; that execution is outside the observed `tool_call` boundary and is not policy-enforced. The Host owns the lifecycle — start is deferred to `session_start` and the whole process tree is killed at `session_shutdown` (no orphans) — but it does not sandbox or OS-contain the child. Grant `process` only to providers you trust with your shell.
+**Process grant is not tool_call-gated.** A provider granted `process` runs child processes with the Pi process's own OS permissions; that execution is outside the observed `tool_call` boundary and is not policy-enforced. The Host owns the lifecycle — start is deferred to `session_start`, and at `session_shutdown` (and when a child's group leader exits early) it best-effort-terminates the child's process group, reaping descendants in the common case. This is best-effort, not OS containment: a child that re-parents into its own session/process group can still escape. Grant `process` only to providers you trust with your shell.
 
 ## Verification
 

@@ -496,6 +496,27 @@ export default createPiHooksExtension({ providers: [proc] });
     });
   }, 30_000);
 
+  it("R1c process grant: reaps a grandchild when the leader exits early (daemonize-then-exit)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-hooks-earlyexit-"));
+    const grandPid = join(dir, "grand.pid");
+    const configPath = join(dir, "pi-hooks.jsonc");
+    await writeFile(configPath, JSON.stringify({ schemaVersion: 2, providers: [{ id: "early", enabled: true }] }));
+    const gc = "const fs=require('fs'); fs.writeFileSync(process.argv[1], String(process.pid)); setInterval(()=>{},10000);";
+    // The leader spawns a same-group grandchild, then exits on its own.
+    const script = "const {spawn}=require('child_process'); spawn('node',['-e'," + JSON.stringify(gc)
+      + ",process.argv[1]],{stdio:'ignore'}); setTimeout(()=>process.exit(0), 200);";
+    const early = defineProvider({
+      manifest: { id: "early", version: "1.0.0", grants: ["process"] },
+      activate(facade) { facade.process.spawn({ id: "early", command: "node", args: ["-e", script, grandPid] }); },
+    });
+    const host = await createHookHost({ configPath, providers: [early] });
+    await host.dispatch(normalizeEvent("session_start", { reason: "startup" }), { cwd: dir, hasUI: false } as never);
+    expect(await waitFor(async () => { try { await readFile(grandPid, "utf8"); return true; } catch { return false; } })).toBe(true);
+    const grand = Number((await readFile(grandPid, "utf8")).trim());
+    // The leader exits ~200ms in; its exit handler reaps the surviving grandchild.
+    expect(await waitFor(() => !isAlive(grand), 4000)).toBe(true);
+  }, 30_000);
+
   it("R1b process grant: a spawn error (ENOENT) degrades the provider instead of being swallowed", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-hooks-enoent-"));
     const configPath = join(dir, "pi-hooks.jsonc");

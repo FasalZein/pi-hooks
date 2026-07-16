@@ -33,7 +33,7 @@ import type {
 const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
 const EFFECT_BEARING = new Set<NormalizedEvent["type"]>(["input", "tool_call", "tool_result", "context"]);
 const FINAL_BOUNDARY = "Authoritative only inside this Host tool_call handler; a later Pi extension can still mutate input before execution.";
-const PROCESS_GRANT_NOTE = "process-grant child processes run with the Pi process's OS permissions, outside the observed tool_call boundary; the Host owns their lifecycle (deferred start, killed at shutdown) but does not sandbox them.";
+const PROCESS_GRANT_NOTE = "process-grant child processes run with the Pi process's OS permissions, outside the observed tool_call boundary; the Host best-effort-terminates their process group at shutdown but does not sandbox them, and a child that re-parents into its own session can escape.";
 
 export interface CreateHookHostOptions {
   configPath?: string;
@@ -161,26 +161,41 @@ class Host implements HookHost {
         const child = spawn(spec.command, [...(spec.args ?? [])], { stdio: "ignore", detached: true });
         child.on("error", (error) => {
           this.degradeProvider(providerId, `process ${spec.id} failed: ${message(error)}`);
-          void this.audit.record(this.processRecord(providerId, spec.id, "module-failure", `process ${spec.id} error`));
+          void this.audit.record(this.processRecord(providerId, spec.id, "module-failure", `process ${spec.id} error: ${message(error)}`));
+        });
+        child.on("exit", () => {
+          // The leader exited: eagerly reap any same-group descendants now, while
+          // the group is still non-empty and its id (the leader pid) cannot yet
+          // be reused. This closes the common daemonize-then-exit leak that a
+          // shutdown-time-only kill would miss.
+          this.reapGroup(child.pid);
         });
         child.unref();
         this.children.push({ child, providerId, specId: spec.id });
         void this.audit.record(this.processRecord(providerId, spec.id, "allow", `process ${spec.id} started`));
       } catch (error) {
         this.degradeProvider(providerId, `process ${spec.id} spawn failed: ${message(error)}`);
-        void this.audit.record(this.processRecord(providerId, spec.id, "module-failure", `process ${spec.id} spawn failed`));
+        void this.audit.record(this.processRecord(providerId, spec.id, "module-failure", `process ${spec.id} spawn failed: ${message(error)}`));
       }
     }
   }
 
-  /** Terminate every provider process tree at session shutdown — no orphans. */
+  /**
+   * Best-effort termination of every provider process group at shutdown. While
+   * a child's group leader is alive this reaps the whole tree; the per-child
+   * exit handler reaps groups whose leader exited early. This is not OS
+   * containment (ADR-0001): a child that re-parents into its own session can
+   * still escape, so the guarantee is best-effort, not absolute.
+   */
   private killProcesses(): void {
     for (const { child } of this.children.splice(0)) {
       const pid = child.pid;
-      if (pid === undefined || child.exitCode !== null || child.signalCode !== null) continue;
+      if (pid === undefined) continue;
+      if (child.exitCode !== null || child.signalCode !== null) {
+        this.reapGroup(pid);
+        continue;
+      }
       try {
-        // Kill the whole process group (negative pid); detached children are
-        // group leaders, so this reaps grandchildren too.
         process.kill(-pid, "SIGKILL");
       } catch {
         try {
@@ -189,6 +204,16 @@ class Host implements HookHost {
           /* already gone */
         }
       }
+    }
+  }
+
+  /** Signal a whole process group by leader pid; ESRCH (empty group) is fine. */
+  private reapGroup(pid: number | undefined): void {
+    if (pid === undefined) return;
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      /* group already empty or gone */
     }
   }
 
@@ -495,7 +520,7 @@ class Host implements HookHost {
         const failure = `${module.id} ${phase} failed: ${message(error)}`;
         this.runtimeFailure = failure;
         const owner = this.providerByModuleId.get(module.id);
-        if (owner) this.degradeProvider(owner, `module ${module.id} ${phase} failed`);
+        if (owner) this.degradeProvider(owner, failure);
         await this.writeDecision(module.id, event, context, phase, "module-failure", failure, currentInput);
         if (phase !== "observe" && this.requiredById.get(module.id) !== false) {
           state.decision = "deny";
