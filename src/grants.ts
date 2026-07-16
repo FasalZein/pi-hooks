@@ -10,7 +10,7 @@ import type { HookModule } from "./types.js";
  * the whole provider surface, keeping the BUG-0002 class (accepted-then-discarded
  * capability) closed.
  */
-export const GRANT_KINDS = ["events", "tools", "commands", "process", "ui"] as const;
+export const GRANT_KINDS = ["events", "tools", "commands", "process", "ui", "interaction"] as const;
 export type GrantKind = (typeof GRANT_KINDS)[number];
 
 export interface CapabilityManifest {
@@ -45,6 +45,21 @@ export interface UiGrant {
   setWidget(key: string, lines: readonly string[] | undefined): void;
 }
 
+export interface ConfirmRequest {
+  title: string;
+  message: string;
+}
+export type ConfirmOutcome = "approved" | "denied";
+/**
+ * interaction grant (ADR-0005): confirm-only subset of the interaction family;
+ * a later slice (SLICE-0020) extends it. The Host binds it to the live session
+ * UI. When no UI is attached (hasUI false) confirm resolves immediately to the
+ * caller-supplied noUiOutcome — fail-closed when the caller passes "denied".
+ */
+export interface InteractionGrant {
+  confirm(request: ConfirmRequest, options: { noUiOutcome: ConfirmOutcome }): Promise<ConfirmOutcome>;
+}
+
 export interface ProviderCommand {
   description?: string;
   handler: (args: string, ctx: unknown) => void | Promise<void>;
@@ -62,6 +77,7 @@ export interface GrantApiMap {
   commands: CommandsGrant;
   process: ProcessGrant;
   ui: UiGrant;
+  interaction: InteractionGrant;
 }
 
 /** The typed facade: only the declared grant kinds are present as properties. */
@@ -111,6 +127,7 @@ export function buildFacade(grants: readonly GrantKind[], wiring: GrantWiring, r
     commands: pick("commands"),
     process: pick("process"),
     ui: pick("ui"),
+    interaction: pick("interaction"),
   };
 }
 

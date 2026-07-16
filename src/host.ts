@@ -7,7 +7,7 @@ import { preparePolicy } from "./policy.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { resolveOrder } from "./order.js";
 import { activateProviders, type PreparedProvider, type ProviderActivation } from "./providers.js";
-import type { AnyCapabilityProvider, ProviderCommand } from "./grants.js";
+import type { AnyCapabilityProvider, InteractionGrant, ProviderCommand } from "./grants.js";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type {
   AuditRecord,
@@ -69,9 +69,10 @@ export async function createHookHost(options: CreateHookHostOptions = {}): Promi
     failure = message(error);
   }
 
+  const interaction = createInteractionBroker();
   let activation: ProviderActivation | undefined;
   if (config) {
-    activation = await activateProviders(options.providers ?? [], config);
+    activation = await activateProviders(options.providers ?? [], config, interaction);
     const policy = preparePolicy(available, config);
     if (policy.ok) {
       ({ modules, phaseOrder, required } = policy);
@@ -93,7 +94,7 @@ export async function createHookHost(options: CreateHookHostOptions = {}): Promi
 
   const audit = new AuditLog(config?.audit?.path, config?.audit?.includeAllows);
   if (activation) for (const record of activation.records) await audit.record(record);
-  const host = new Host(configPath, config, modules, phaseOrder, required, audit, failure, activation);
+  const host = new Host(configPath, config, modules, phaseOrder, required, audit, failure, activation, interaction);
   if (failure) await host.recordSafeMode(failure);
   return host;
 }
@@ -101,6 +102,32 @@ export async function createHookHost(options: CreateHookHostOptions = {}): Promi
 interface PhaseState {
   decision: HookDecision;
   reason?: string;
+}
+
+interface InteractionBroker extends InteractionGrant {
+  /** Host-owned: rebind the broker to the DispatchContext of the current dispatch. */
+  setContext(context: DispatchContext): void;
+}
+
+/**
+ * Live-bound interaction broker (SLICE-0011 item 3): the Host updates the
+ * current DispatchContext at each dispatch, and confirm resolves through the
+ * real ctx.ui when a UI is attached. With no UI (hasUI false, or no dispatch
+ * context yet) the caller-supplied noUiOutcome returns immediately — nothing
+ * ever waits on an absent operator.
+ */
+function createInteractionBroker(): InteractionBroker {
+  let current: DispatchContext | undefined;
+  return {
+    setContext(context) {
+      current = context;
+    },
+    async confirm(request, options) {
+      const ui = current?.hasUI ? current.ui : undefined;
+      if (!ui?.confirm) return options.noUiOutcome;
+      return (await ui.confirm(request.title, request.message)) ? "approved" : "denied";
+    },
+  };
 }
 
 class Host implements HookHost {
@@ -126,7 +153,8 @@ class Host implements HookHost {
     private readonly requiredById: Map<string, boolean>,
     private readonly audit: AuditLog,
     failure: string | undefined,
-    activation?: ProviderActivation,
+    activation: ProviderActivation | undefined,
+    private readonly interaction: InteractionBroker,
   ) {
     this.configFailure = failure;
     this.providers = activation?.providers ?? [];
@@ -295,6 +323,7 @@ class Host implements HookHost {
   }
 
   async dispatch(event: NormalizedEvent, context: DispatchContext): Promise<DispatchResult> {
+    this.interaction.setContext(context);
     if (event.type === "session_start") {
       this.startProcesses();
       this.flushUi(context);

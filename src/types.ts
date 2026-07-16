@@ -47,10 +47,13 @@ export interface DispatchContext {
     getSessionFile?(): string | undefined;
     getSessionId?(): string;
   };
-  /** Real Pi UI surface, present on events dispatched from a loaded session. */
+  /** Real Pi UI surface, present on events dispatched from a loaded session.
+   * Additive extension only — the nine-event HookModule contract is unchanged. */
   ui?: {
     setStatus(key: string, text: string | undefined): void;
     setWidget?(key: string, lines: readonly string[] | undefined): void;
+    /** Pi's ExtensionUIContext.confirm, used by the interaction grant broker. */
+    confirm?(title: string, message: string): Promise<boolean>;
   };
 }
 

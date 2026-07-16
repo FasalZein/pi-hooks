@@ -11,8 +11,11 @@ export type { PolicyEngineConfig, PolicyRuleConfig } from "./policy-engine.js";
 export type {
   CapabilityManifest,
   CapabilityProvider,
+  ConfirmOutcome,
+  ConfirmRequest,
   GrantFacade,
   GrantKind,
+  InteractionGrant,
 } from "./grants.js";
 export type {
   AuditRecord,

@@ -44,7 +44,7 @@
         "Run red, record evidence in .ralph/progress.md",
         "Implement the interaction grant kind in src/grants.ts + src/providers.ts and the broker in createHookHost (Host updates the broker's current DispatchContext per dispatch); extend DispatchContext.ui additively with confirm via one internal wider type for the Pi ui surface (the nine-event HookModule contract stays unchanged); run npm run verify green"
       ],
-      "passes": false,
+      "passes": true,
       "regression_notes": ""
     },
     {

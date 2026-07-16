@@ -49,3 +49,28 @@
 **Verification:** `npm run verify` → exit 0: tsc clean, eslint clean, vitest 86/86 (5 files, all prior 78 still green).
 
 **Next-iteration notes:** Item 3 (confirm-only interaction grant) is next per plan order. `withPolicySession`/`emitToolCall` helpers live in `test/policy-engine.test.ts`; the bundled default export is exercised via `export { default } from <src/index.ts> }` source. DispatchContext.ui extension is additive-permitted per plan.
+
+## Iteration 3 — Item 3: Confirm-only interaction grant (functional)
+
+**Decision rationale:** First unfinished item per plan prioritization (items 4–6 depend on the interaction grant).
+
+**Red evidence (direct dispatch seam):** New `test/interaction.test.ts` (4 tests) written first; run before implementation: 4/4 failed. The three fixture-provider tests received `undefined` from `emitToolCall` because the manifest declaring `grants: ["events", "interaction"]` failed validation (`unknown grant: interaction`) and the provider was isolated, so its guard module never registered. The refusal test found only a `module-failure` audit record (TypeError on the missing facade key), not `grant-refused`.
+
+**What was done:**
+- `src/grants.ts`: added `"interaction"` to `GRANT_KINDS`; new `ConfirmRequest`/`ConfirmOutcome` (`"approved" | "denied"`)/`InteractionGrant` (`confirm(request, { noUiOutcome })`); wired into `GrantApiMap` and `buildFacade` so undeclared access hits the existing refusal proxy.
+- `src/host.ts`: `createInteractionBroker()` — live-bound broker holding the current `DispatchContext`; `Host.dispatch` rebinds it at the top of every dispatch. `confirm` resolves through `context.ui.confirm(title, message)` (boolean → approved/denied) only when `hasUI` is true and confirm exists; otherwise it returns `noUiOutcome` immediately (also when no dispatch has occurred yet, e.g. confirm called during activate). Broker is created in `createHookHost` and handed to both `activateProviders` and the `Host`.
+- `src/providers.ts`: `activateProviders`/`collectingWiring` take the `InteractionGrant`; interaction is a live call surface handed through directly (confirm has no persistent effect to stage/roll back — transactional activation semantics unchanged).
+- `src/types.ts`: `DispatchContext.ui` extended additively with optional `confirm?(title, message): Promise<boolean>` (Pi's `ExtensionUIContext.confirm` shape). No cast/wider type needed since `DispatchContext` is our own declared type; the nine-event `HookModule` contract is untouched.
+- `src/index.ts`: exports the three new grant types.
+- Tests: no-UI → `noUiOutcome` returned immediately (runner reports `hasUI=false` when no uiContext is bound); stubbed `ctx.ui.confirm` via `session.bindExtensions({ uiContext })` receives the exact request and its accepting (true→approved) and rejecting (false→denied) answers round-trip; undeclared interaction access → `grant-refused` audit record with provider attribution plus the rollback `module-failure` record.
+
+**Assumptions (conservative, reversible):**
+- Item text says “uiContext … reporting hasUI=false”, but Pi's runner computes `hasUI` as `uiContext !== noOpUIContext` — binding any uiContext makes it true. The hasUI=false case therefore binds no uiContext (the runner's own false state). Recorded as the only faithful way to get `hasUI=false` at this seam.
+- Initially asserted the refusal reason contained `interaction.confirm`; the audit substrate always privacy-redacts persisted `reason` fields (`src/audit.ts` `minimize()`), so the test follows the existing GRANT_KINDS refusal pattern (decision + provider attribution) and additionally pins the activation rollback record. Not a weakening: reason redaction is pre-existing pinned substrate behavior.
+- `ConfirmOutcome` is the two-value set `approved`/`denied`; item 4 maps `denied` to a guard deny.
+
+**Changed files:** `src/grants.ts`, `src/host.ts`, `src/providers.ts`, `src/types.ts`, `src/index.ts`, `test/interaction.test.ts` (new).
+
+**Verification:** `npm run verify` → exit 0: tsc clean, eslint clean, vitest 90/90 (6 files; all prior 86 still green).
+
+**Next-iteration notes:** Item 4 (ask severity + fail-closed) is next. Use `facade.interaction.confirm(…, { noUiOutcome: "denied" })` from the policy engine's guard — the policy engine manifest must add the `interaction` grant. The scripted agent turn seam (deterministic `session.agent.streamFn` + marker tool) has no helper yet; build it in item 4's test file. `confirmingUiContext` stub lives in `test/interaction.test.ts`.

@@ -9,6 +9,7 @@ import {
   type AnyCapabilityProvider,
   type GrantKind,
   type GrantWiring,
+  type InteractionGrant,
   type ProcessSpec,
   type ProviderCommand,
 } from "./grants.js";
@@ -72,6 +73,7 @@ export interface ProviderActivation {
 export async function activateProviders(
   available: readonly AnyCapabilityProvider[],
   config: GlobalConfig,
+  interaction: InteractionGrant,
 ): Promise<ProviderActivation> {
   const authorized = new Map<string, ProviderConfigEntry>();
   for (const entry of config.providers) authorized.set(entry.id, entry);
@@ -128,7 +130,7 @@ export async function activateProviders(
       // commit to shared state only if activate() completes. A provider that
       // registers and then throws leaves nothing behind.
       const staged = emptyActivation();
-      const wiring = collectingWiring(current, staged);
+      const wiring = collectingWiring(current, staged, interaction);
       // Refusals are security events: record them on the committed log immediately
       // so they survive an activation rollback (the refusal proxy throws after).
       const refuse = (grant: GrantKind, methodName: string): void => {
@@ -236,7 +238,7 @@ function validateProviderConfig(schema: TSchema | undefined, config: unknown): s
   return errors.join("; ") || "does not match provider config schema";
 }
 
-function collectingWiring(prepared: PreparedProvider, activation: ProviderActivation): GrantWiring {
+function collectingWiring(prepared: PreparedProvider, activation: ProviderActivation, interaction: InteractionGrant): GrantWiring {
   const providerId = prepared.id;
   return {
     events: {
@@ -253,6 +255,9 @@ function collectingWiring(prepared: PreparedProvider, activation: ProviderActiva
       setStatus: (key, text) => activation.uiOps.push({ providerId, kind: "status", key, text }),
       setWidget: (key, lines) => activation.uiOps.push({ providerId, kind: "widget", key, lines }),
     },
+    // Live call surface, not a staged registration: confirm has no persistent
+    // effect to roll back, so the broker is handed through directly.
+    interaction,
   };
 }
 
