@@ -6,6 +6,7 @@ import { createAgentSession, DefaultResourceLoader, SessionManager, type AgentSe
 import { describe, expect, it } from "vitest";
 import { Type } from "typebox";
 import { createHookHost, defineProvider } from "../src/index.js";
+import { loadGlobalConfig } from "../src/config.js";
 
 const hooksIndexPath = fileURLToPath(new URL("../src/index.ts", import.meta.url));
 
@@ -363,4 +364,42 @@ export default createPiHooksExtension({ providers: [widgeter] });
       expect(statuses).toContainEqual(["uier:diagnostics", "3 warnings"]);
     });
   }, 30_000);
+});
+
+describe("SLICE-0009 AC4: schemaVersion 2 migration and safe-mode fallback", () => {
+  it("migrates a schemaVersion 1 file to v2 with an empty providers section, preserving modules", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-hooks-migrate-"));
+    const path = join(dir, "pi-hooks.jsonc");
+    await writeFile(path, JSON.stringify({ schemaVersion: 1, modules: [{ id: "legacy", enabled: true }] }));
+    const config = await loadGlobalConfig(path);
+    expect(config.schemaVersion).toBe(2);
+    expect(config.providers).toEqual([]);
+    expect(config.modules).toEqual([{ id: "legacy", enabled: true }]);
+  });
+
+  it("accepts a native schemaVersion 2 file with a providers section", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-hooks-v2-"));
+    const path = join(dir, "pi-hooks.jsonc");
+    await writeFile(path, JSON.stringify({ schemaVersion: 2, providers: [{ id: "p", enabled: true }] }));
+    const config = await loadGlobalConfig(path);
+    expect(config.schemaVersion).toBe(2);
+    expect(config.providers).toEqual([{ id: "p", enabled: true }]);
+    expect(config.modules).toEqual([]);
+  });
+
+  it("rejects an unsupported schemaVersion with a precise error", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-hooks-badver-"));
+    const path = join(dir, "pi-hooks.jsonc");
+    await writeFile(path, JSON.stringify({ schemaVersion: 3, modules: [] }));
+    await expect(loadGlobalConfig(path)).rejects.toThrow(/schemaVersion/);
+  });
+
+  it("keeps an unsupported-version global config in Read-Only Safe Mode", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-hooks-safe-"));
+    const path = join(dir, "pi-hooks.jsonc");
+    await writeFile(path, JSON.stringify({ schemaVersion: 3 }));
+    const host = await createHookHost({ configPath: path });
+    expect(host.status().mode).toBe("read-only-safe");
+    expect(host.status().configuration.health).toBe("invalid");
+  });
 });
