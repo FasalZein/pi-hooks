@@ -6,15 +6,28 @@ export { createHookHost } from "./host.js";
 export type { CreateHookHostOptions, HookHost } from "./host.js";
 export type {
   AuditRecord,
+  ContextDispatchResult,
+  ContextHandlers,
   DispatchContext,
   DispatchResult,
+  GuardResult,
   HookDecision,
+  HookEventType,
   HookInvocation,
   HookModule,
   HookPhase,
   HostStatus,
+  InputDispatchResult,
+  InputHandlers,
   NormalizedEvent,
   ObserveInvocation,
+  ObserveOnlyEventType,
+  ObserveOnlyHandlers,
+  ToolCallDispatchResult,
+  ToolCallHandlers,
+  ToolResultDispatchResult,
+  ToolResultHandlers,
+  ToolResultPatch,
 } from "./types.js";
 
 export default createPiHooksExtension();

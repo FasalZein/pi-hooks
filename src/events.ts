@@ -17,6 +17,7 @@ const NATIVE = new Set<NormalizedEvent["type"]>([
   "input",
   "tool_call",
   "tool_result",
+  "context",
   "agent_end",
   "session_start",
   "session_shutdown",
@@ -30,10 +31,7 @@ export function normalizeEvent(sourceType: string, payload: Record<string, unkno
     : undefined);
   if (!type) throw new Error(`Unsupported Hook Host event: ${sourceType}`);
 
-  const rawInput = payload.input ?? payload.toolInput ?? {};
-  const input = rawInput && typeof rawInput === "object" && !Array.isArray(rawInput)
-    ? cloneDeep(rawInput as Record<string, unknown>)
-    : {};
+  const input = normalizeInput(type, payload);
 
   return {
     type,
@@ -44,6 +42,22 @@ export function normalizeEvent(sourceType: string, payload: Record<string, unkno
     isError: sourceType === "PostToolUseFailure" || payload.isError === true,
     payload,
   };
+}
+
+function normalizeInput(type: NormalizedEvent["type"], payload: Record<string, unknown>): Record<string, unknown> {
+  if (type === "input") {
+    return cloneDeep({
+      text: stringValue(payload.text) ?? "",
+      ...(Array.isArray(payload.images) ? { images: payload.images } : {}),
+    });
+  }
+  if (type === "context") {
+    return cloneDeep({ messages: Array.isArray(payload.messages) ? payload.messages : [] });
+  }
+  const rawInput = payload.input ?? payload.toolInput ?? {};
+  return rawInput && typeof rawInput === "object" && !Array.isArray(rawInput)
+    ? cloneDeep(rawInput as Record<string, unknown>)
+    : {};
 }
 
 function stringValue(value: unknown): string | undefined {

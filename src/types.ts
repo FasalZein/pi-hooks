@@ -2,21 +2,27 @@ export const PHASES = ["guard", "transform", "internal-final", "context", "obser
 export type HookPhase = (typeof PHASES)[number];
 export type HookDecision = "allow" | "deny";
 
+export const EVENT_TYPES = [
+  "input",
+  "tool_call",
+  "tool_result",
+  "context",
+  "agent_end",
+  "session_start",
+  "session_shutdown",
+  "session_before_compact",
+  "session_compact",
+] as const;
+export type HookEventType = (typeof EVENT_TYPES)[number];
+export type ObserveOnlyEventType = "agent_end" | "session_start" | "session_shutdown" | "session_before_compact" | "session_compact";
+
 export interface ToolProvenance {
   source: string;
   path?: string;
 }
 
 export interface NormalizedEvent {
-  type:
-    | "input"
-    | "tool_call"
-    | "tool_result"
-    | "agent_end"
-    | "session_start"
-    | "session_shutdown"
-    | "session_before_compact"
-    | "session_compact";
+  type: HookEventType;
   sourceType: string;
   toolName?: string;
   toolCallId?: string;
@@ -39,6 +45,8 @@ export interface HookInvocation {
   event: NormalizedEvent;
   input: Readonly<Record<string, unknown>>;
   context: DispatchContext;
+  /** Present only on tool_result: the current (chained) result view a patch applies to. */
+  result?: Readonly<ToolResultPatch>;
 }
 
 export interface ObserveInvocation extends HookInvocation {
@@ -47,16 +55,88 @@ export interface ObserveInvocation extends HookInvocation {
   contextAdditions: readonly string[];
 }
 
+type MaybePromise<T> = T | Promise<T>;
+
+export interface GuardResult {
+  decision: HookDecision;
+  reason?: string;
+}
+
+/** Pi input transform: full text replacement; omitted images preserve Pi's prior images. */
+export interface InputTransformResult {
+  text: string;
+  images?: unknown[];
+}
+
+/** Pi tool_call transform: a full input replacement, never a patch. */
+export interface ToolCallTransformResult {
+  input: Record<string, unknown>;
+}
+
+/** Pi tool_result effect: a partial patch of content/details/isError. */
+export interface ToolResultPatch {
+  content?: unknown;
+  details?: unknown;
+  isError?: boolean;
+}
+
+/** Pi context effect: full message-list replacement. */
+export interface ContextTransformResult {
+  messages: unknown[];
+}
+
+export interface ContextAdditionResult {
+  context: string | readonly string[];
+}
+
+export interface InputHandlers {
+  guard?(invocation: HookInvocation): MaybePromise<void | GuardResult>;
+  transform?(invocation: HookInvocation): MaybePromise<void | InputTransformResult>;
+  observe?(invocation: ObserveInvocation): MaybePromise<void>;
+}
+
+export interface ToolCallHandlers {
+  guard?(invocation: HookInvocation): MaybePromise<void | GuardResult>;
+  transform?(invocation: HookInvocation): MaybePromise<void | ToolCallTransformResult>;
+  internalFinal?(invocation: HookInvocation): MaybePromise<void | GuardResult>;
+  context?(invocation: HookInvocation): MaybePromise<void | ContextAdditionResult>;
+  observe?(invocation: ObserveInvocation): MaybePromise<void>;
+}
+
+export interface ToolResultHandlers {
+  patch?(invocation: HookInvocation): MaybePromise<void | ToolResultPatch>;
+  context?(invocation: HookInvocation): MaybePromise<void | ContextAdditionResult>;
+  observe?(invocation: ObserveInvocation): MaybePromise<void>;
+}
+
+export interface ContextHandlers {
+  transform?(invocation: HookInvocation): MaybePromise<void | ContextTransformResult>;
+  observe?(invocation: ObserveInvocation): MaybePromise<void>;
+}
+
+export interface ObserveOnlyHandlers {
+  observe?(invocation: ObserveInvocation): MaybePromise<void>;
+}
+
+/**
+ * Event-keyed Hook Module contract (SLICE-0007/SLICE-0008): each exposed event
+ * offers exactly the effects the real Pi 0.80.7 adapter consumes for it, so an
+ * unsupported effect is unexpressible by type rather than silently discarded.
+ */
 export interface HookModule {
   id: string;
   requires?: readonly string[];
   before?: readonly string[];
   after?: readonly string[];
-  guard?(invocation: HookInvocation): void | { decision: HookDecision; reason?: string } | Promise<void | { decision: HookDecision; reason?: string }>;
-  transform?(invocation: HookInvocation): void | { input: Record<string, unknown> } | Promise<void | { input: Record<string, unknown> }>;
-  internalFinal?(invocation: HookInvocation): void | { decision: HookDecision; reason?: string } | Promise<void | { decision: HookDecision; reason?: string }>;
-  context?(invocation: HookInvocation): void | { context: string | readonly string[] } | Promise<void | { context: string | readonly string[] }>;
-  observe?(invocation: ObserveInvocation): void | Promise<void>;
+  input?: InputHandlers;
+  tool_call?: ToolCallHandlers;
+  tool_result?: ToolResultHandlers;
+  context?: ContextHandlers;
+  agent_end?: ObserveOnlyHandlers;
+  session_start?: ObserveOnlyHandlers;
+  session_shutdown?: ObserveOnlyHandlers;
+  session_before_compact?: ObserveOnlyHandlers;
+  session_compact?: ObserveOnlyHandlers;
 }
 
 export interface AuditRecord {
@@ -70,14 +150,53 @@ export interface AuditRecord {
   inputSummary?: unknown;
 }
 
-export interface DispatchResult {
+interface DispatchBase {
   decision: HookDecision;
   reason?: string;
-  /** True only when a module transform produced an explicit replacement input. */
+}
+
+export interface InputDispatchResult extends DispatchBase {
+  event: "input";
+  /** True only when a module transform produced an explicit replacement. */
+  mutated: boolean;
+  text?: string;
+  /** Omitted unless a module supplied replacement images; Pi preserves prior images. */
+  images?: unknown[];
+}
+
+export interface ToolCallDispatchResult extends DispatchBase {
+  event: "tool_call";
+  /** True only when a module transform produced an explicit full replacement input. */
   mutated: boolean;
   input: Record<string, unknown>;
-  contextAdditions: string[];
+  contextAdditions: readonly string[];
 }
+
+export interface ToolResultDispatchResult extends DispatchBase {
+  event: "tool_result";
+  /** Merged partial patch, present only when a module produced one. */
+  patch?: ToolResultPatch;
+  contextAdditions: readonly string[];
+}
+
+export interface ContextDispatchResult extends DispatchBase {
+  event: "context";
+  /** Replacement message list, present only when a module transform produced one. */
+  messages?: unknown[];
+  /** Queued tool context drained exactly once into this real context event. */
+  queuedContext: readonly string[];
+}
+
+export interface ObserveOnlyDispatchResult extends DispatchBase {
+  event: ObserveOnlyEventType;
+}
+
+export type DispatchResult =
+  | InputDispatchResult
+  | ToolCallDispatchResult
+  | ToolResultDispatchResult
+  | ContextDispatchResult
+  | ObserveOnlyDispatchResult;
 
 export interface HostStatus {
   configSource: string;

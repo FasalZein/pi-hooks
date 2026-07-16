@@ -1,26 +1,56 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, InputEventResult } from "@earendil-works/pi-coding-agent";
 import { normalizeEvent } from "./events.js";
 import { createHookHost, type CreateHookHostOptions } from "./host.js";
 import type { DispatchContext } from "./types.js";
 
+/**
+ * The Pi seam (SLICE-0008): one binding per exposed event. Each binding
+ * normalizes in, dispatches, and applies the typed result to Pi's exact public
+ * result shape. The five observe-only events apply nothing.
+ */
 export function createPiHooksExtension(options: CreateHookHostOptions = {}) {
   return async function piHooksExtension(pi: ExtensionAPI): Promise<void> {
     const host = await createHookHost(options);
+
+    pi.on("input", async (event, ctx) => {
+      const result = await host.dispatch(normalizeEvent("input", record(event)), ctx as DispatchContext);
+      if (result.event !== "input") return;
+      if (result.decision === "deny") return { action: "handled" as const };
+      if (result.mutated && result.text !== undefined) {
+        return {
+          action: "transform",
+          text: result.text,
+          ...(result.images !== undefined ? { images: result.images } : {}),
+        } as InputEventResult;
+      }
+    });
 
     pi.on("tool_call", async (event, ctx) => {
       const normalized = normalizeEvent("tool_call", record(event));
       normalized.provenance = resolveProvenance(pi, normalized.toolName);
       const result = await host.dispatch(normalized, ctx as DispatchContext);
+      if (result.event !== "tool_call") return;
       if (result.mutated) replaceInput(event.input as Record<string, unknown>, result.input);
       if (result.decision === "deny") return { block: true, reason: result.reason };
     });
 
-    pi.on("input", async (event, ctx) => {
-      await host.dispatch(normalizeEvent("input", record(event)), ctx as DispatchContext);
-    });
     pi.on("tool_result", async (event, ctx) => {
-      await host.dispatch(normalizeEvent("tool_result", record(event)), ctx as DispatchContext);
+      const result = await host.dispatch(normalizeEvent("tool_result", record(event)), ctx as DispatchContext);
+      if (result.event !== "tool_result") return;
+      // Host patch fields are Pi's exact partial tool_result shape; the SDK does not re-export ToolResultEventResult.
+      if (result.patch) return result.patch as never;
     });
+
+    pi.on("context", async (event, ctx) => {
+      const result = await host.dispatch(normalizeEvent("context", record(event)), ctx as DispatchContext);
+      if (result.event !== "context") return;
+      const queued = result.queuedContext.map((text) => ({ role: "user" as const, content: [{ type: "text" as const, text }] }));
+      if (result.messages === undefined && queued.length === 0) return;
+      const base = result.messages ?? (event as { messages: unknown[] }).messages;
+      // Host messages are Pi's exact context replacement shape; the SDK does not re-export ContextEventResult.
+      return { messages: [...base, ...queued] } as never;
+    });
+
     pi.on("agent_end", async (event, ctx) => {
       await host.dispatch(normalizeEvent("agent_end", record(event)), ctx as DispatchContext);
     });

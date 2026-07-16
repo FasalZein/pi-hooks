@@ -121,11 +121,13 @@ describe("Hook Host dispatch and Pi adapter", () => {
     const seen: string[] = [];
     const module: HookModule = {
       id: "tracer",
-      guard: () => { seen.push("guard"); },
-      transform: ({ input }) => { seen.push("transform"); return { input: { ...input, traced: true } }; },
-      internalFinal: ({ input }) => { seen.push(`internal-final:${input.traced}`); },
-      context: () => { seen.push("context"); return { context: "hidden tracer context" }; },
-      observe: ({ decision, contextAdditions }) => { seen.push(`observe:${decision}:${contextAdditions.length}`); },
+      tool_call: {
+        guard: () => { seen.push("guard"); },
+        transform: ({ input }) => { seen.push("transform"); return { input: { ...input, traced: true } }; },
+        internalFinal: ({ input }) => { seen.push(`internal-final:${input.traced}`); },
+        context: () => { seen.push("context"); return { context: "hidden tracer context" }; },
+        observe: ({ decision, contextAdditions }) => { seen.push(`observe:${decision}:${contextAdditions.length}`); },
+      },
     };
     const { configPath } = await fixture(validConfig(["tracer"]));
     const host = await createHookHost({ configPath, modules: [module] });
@@ -143,17 +145,19 @@ describe("Hook Host dispatch and Pi adapter", () => {
     const seen: string[] = [];
     const module: HookModule = {
       id: "policy",
-      guard: ({ input }) => { seen.push(`guard:${input.command}`); },
-      transform: ({ input }) => {
-        seen.push(`transform:${input.command}`);
-        return { input: { ...input, command: "denied" } };
+      tool_call: {
+        guard: ({ input }) => { seen.push(`guard:${input.command}`); },
+        transform: ({ input }) => {
+          seen.push(`transform:${input.command}`);
+          return { input: { ...input, command: "denied" } };
+        },
+        internalFinal: ({ input }) => {
+          seen.push(`internal-final:${input.command}`);
+          if (input.command === "denied") return { decision: "deny", reason: "transformed input denied" };
+        },
+        context: () => { seen.push("context"); return { context: "hidden" }; },
+        observe: ({ decision }) => { seen.push(`observe:${decision}`); },
       },
-      internalFinal: ({ input }) => {
-        seen.push(`internal-final:${input.command}`);
-        if (input.command === "denied") return { decision: "deny", reason: "transformed input denied" };
-      },
-      context: () => { seen.push("context"); return { context: "hidden" }; },
-      observe: ({ decision }) => { seen.push(`observe:${decision}`); },
     };
     const { configPath } = await fixture(validConfig(["policy"]));
     const pi = fakePi();
@@ -178,7 +182,9 @@ describe("Hook Host dispatch and Pi adapter", () => {
   it("returns Host mutation through the ordinary tool_call path", async () => {
     const module: HookModule = {
       id: "rewrite",
-      transform: () => ({ input: { command: "echo safe", removed: undefined } }),
+      tool_call: {
+        transform: () => ({ input: { command: "echo safe", removed: undefined } }),
+      },
     };
     const { configPath } = await fixture(validConfig(["rewrite"]));
     const pi = fakePi();
@@ -199,9 +205,9 @@ describe("ordering and effective policy validation", () => {
   it("orders phase handlers deterministically with before/after dependencies", async () => {
     const seen: string[] = [];
     const modules: HookModule[] = [
-      { id: "c", after: ["b"], guard: () => { seen.push("c"); } },
-      { id: "a", before: ["b"], guard: () => { seen.push("a"); } },
-      { id: "b", guard: () => { seen.push("b"); } },
+      { id: "c", after: ["b"], tool_call: { guard: () => { seen.push("c"); } } },
+      { id: "a", before: ["b"], tool_call: { guard: () => { seen.push("a"); } } },
+      { id: "b", tool_call: { guard: () => { seen.push("b"); } } },
     ];
     const { configPath } = await fixture(validConfig(["c", "a", "b"]));
     const host = await createHookHost({ configPath, modules });
@@ -217,7 +223,7 @@ describe("ordering and effective policy validation", () => {
     }));
     const degradedHost = await createHookHost({
       configPath: optionalMissing.configPath,
-      modules: [{ id: "present", guard: () => undefined }],
+      modules: [{ id: "present", tool_call: { guard: () => undefined } }],
     });
     const status = degradedHost.status();
     expect(status.mode).toBe("normal");
@@ -248,8 +254,8 @@ describe("ordering and effective policy validation", () => {
     const host = await createHookHost({
       configPath,
       modules: [
-        { id: "dup", guard: () => undefined },
-        { id: "dup", internalFinal: () => ({ decision: "deny", reason: "impostor collapsed in" }) },
+        { id: "dup", tool_call: { guard: () => undefined } },
+        { id: "dup", tool_call: { internalFinal: () => ({ decision: "deny", reason: "impostor collapsed in" }) } },
       ],
     });
     expect(host.status()).toMatchObject({
@@ -263,15 +269,15 @@ describe("ordering and effective policy validation", () => {
     await expect(createHookHost({
       configPath: cycle.configPath,
       modules: [
-        { id: "a", after: ["b"], guard: () => undefined },
-        { id: "b", after: ["a"], guard: () => undefined },
+        { id: "a", after: ["b"], tool_call: { guard: () => undefined } },
+        { id: "b", after: ["a"], tool_call: { guard: () => undefined } },
       ],
     })).resolves.toMatchObject({ status: expect.any(Function) });
     const cycleHost = await createHookHost({
       configPath: cycle.configPath,
       modules: [
-        { id: "a", after: ["b"], guard: () => undefined },
-        { id: "b", after: ["a"], guard: () => undefined },
+        { id: "a", after: ["b"], tool_call: { guard: () => undefined } },
+        { id: "b", after: ["a"], tool_call: { guard: () => undefined } },
       ],
     });
     expect(cycleHost.status()).toMatchObject({ mode: "read-only-safe", configuration: { health: "invalid" } });
@@ -279,7 +285,7 @@ describe("ordering and effective policy validation", () => {
     const missing = await fixture(validConfig(["a"]));
     const missingHost = await createHookHost({
       configPath: missing.configPath,
-      modules: [{ id: "a", requires: ["required-module"], guard: () => undefined }],
+      modules: [{ id: "a", requires: ["required-module"], tool_call: { guard: () => undefined } }],
     });
     expect(missingHost.status().configuration.lastFailure).toContain("required-module");
   });
@@ -329,7 +335,7 @@ describe("configuration, safe mode, audit, and status", () => {
     }));
     const host = await createHookHost({
       configPath: failed.configPath,
-      modules: [{ id: "optional", guard: () => { throw new Error("boom"); } }],
+      modules: [{ id: "optional", tool_call: { guard: () => { throw new Error("boom"); } } }],
     });
     const result = await host.dispatch(normalizeEvent("tool_call", { toolName: "read", toolCallId: "f", input: { path: "x" } }), ctx as never);
     expect(result.decision).toBe("allow");
@@ -341,12 +347,14 @@ describe("configuration, safe mode, audit, and status", () => {
     const secrets = ["bearer-secret", "query-token", "url-password", "error-password", "input-token"];
     const module: HookModule = {
       id: "audit-policy",
-      guard: () => { throw new Error("request failed password=error-password"); },
-      transform: ({ input }) => ({ input: { ...input, password: "do-not-log" } }),
-      internalFinal: () => ({
-        decision: "deny",
-        reason: "Bearer bearer-secret rejected https://user:url-password@example.test/run?token=query-token",
-      }),
+      tool_call: {
+        guard: () => { throw new Error("request failed password=error-password"); },
+        transform: ({ input }) => ({ input: { ...input, password: "do-not-log" } }),
+        internalFinal: () => ({
+          decision: "deny",
+          reason: "Bearer bearer-secret rejected https://user:url-password@example.test/run?token=query-token",
+        }),
+      },
     };
     const { configPath, auditPath } = await fixture(validConfig());
     await writeFile(configPath, JSON.stringify({
@@ -383,7 +391,7 @@ describe("configuration, safe mode, audit, and status", () => {
     }));
     const host = await createHookHost({
       configPath,
-      modules: [{ id: "denier", guard: () => ({ decision: "deny" as const, reason: "blocked token=hunter2" }) }],
+      modules: [{ id: "denier", tool_call: { guard: () => ({ decision: "deny" as const, reason: "blocked token=hunter2" }) } }],
     });
 
     for (let index = 0; index < 600; index += 1) {
@@ -450,8 +458,10 @@ describe("configuration, safe mode, audit, and status", () => {
       configPath,
       modules: [{
         id: "policy",
-        transform: () => ({ input: { command: "echo safe" } }),
-        internalFinal: () => ({ decision: "deny", reason: "blocked" }),
+        tool_call: {
+          transform: () => ({ input: { command: "echo safe" } }),
+          internalFinal: () => ({ decision: "deny", reason: "blocked" }),
+        },
       }],
     });
 
@@ -477,7 +487,7 @@ describe("configuration, safe mode, audit, and status", () => {
     }));
     const host = await createHookHost({
       configPath,
-      modules: [{ id: "flaky", guard: () => { throw new Error("flaky boom"); } }],
+      modules: [{ id: "flaky", tool_call: { guard: () => { throw new Error("flaky boom"); } } }],
     });
     const result = await host.dispatch(normalizeEvent("tool_call", {
       toolName: "bash",
@@ -501,7 +511,7 @@ describe("configuration, safe mode, audit, and status", () => {
     const { configPath } = await fixture(validConfig(["one"]));
     const pi = fakePi();
     const notices: string[] = [];
-    await createPiHooksExtension({ configPath, modules: [{ id: "one", guard: () => undefined }] })(pi.api as never);
+    await createPiHooksExtension({ configPath, modules: [{ id: "one", tool_call: { guard: () => undefined } }] })(pi.api as never);
     await pi.commands.get("hooks")?.handler("status", { ...ctx, ui: { notify: (text: string) => notices.push(text) } });
     const status = JSON.parse(notices[0]);
     expect(status).toMatchObject({

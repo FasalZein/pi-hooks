@@ -50,6 +50,20 @@ export function resolveOrder(modules: readonly HookModule[]): {
 }
 
 function hasPhase(module: HookModule, phase: HookPhase): boolean {
-  if (phase === "internal-final") return typeof module.internalFinal === "function";
-  return typeof module[phase] === "function";
+  switch (phase) {
+    case "guard":
+      return typeof module.input?.guard === "function" || typeof module.tool_call?.guard === "function";
+    case "transform":
+      return typeof module.input?.transform === "function"
+        || typeof module.tool_call?.transform === "function"
+        || typeof module.tool_result?.patch === "function"
+        || typeof module.context?.transform === "function";
+    case "internal-final":
+      return typeof module.tool_call?.internalFinal === "function";
+    case "context":
+      return typeof module.tool_call?.context === "function" || typeof module.tool_result?.context === "function";
+    case "observe":
+      return [module.input, module.tool_call, module.tool_result, module.context, module.agent_end, module.session_start, module.session_shutdown, module.session_before_compact, module.session_compact]
+        .some((group) => typeof group?.observe === "function");
+  }
 }

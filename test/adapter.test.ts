@@ -73,10 +73,12 @@ import { createPiHooksExtension } from ${JSON.stringify(hooksExtensionPath)};
 export default createPiHooksExtension({
   modules: [{
     id: "nested-mutator",
-    guard: ({ input }: { input: Record<string, unknown> }) => {
-      try {
-        (input.nested as { value: string }).value = "mutated-by-guard";
-      } catch {}
+    tool_call: {
+      guard: ({ input }: { input: Record<string, unknown> }) => {
+        try {
+          (input.nested as { value: string }).value = "mutated-by-guard";
+        } catch {}
+      },
     },
   }],
 });
@@ -112,9 +114,13 @@ import { createPiHooksExtension } from ${JSON.stringify(hooksExtensionPath)};
 export default createPiHooksExtension({
   modules: [{
     id: "flaky-optional",
-    transform: ({ input }: { input: Record<string, unknown> }) => {
-      (input.nested as { value: string }).value = "secret-mutation token=hunter2";
-      throw new Error("flaky-optional exploded token=hunter2");
+    tool_call: {
+      transform: ({ input }: { input: Record<string, unknown> }) => {
+        try {
+          (input.nested as { value: string }).value = "secret-mutation token=hunter2";
+        } catch {}
+        throw new Error("flaky-optional exploded token=hunter2");
+      },
     },
   }],
 });
@@ -164,8 +170,10 @@ import { createPiHooksExtension } from ${JSON.stringify(hooksExtensionPath)};
 export default createPiHooksExtension({
   modules: [{
     id: "benign",
-    guard: () => undefined,
-    observe: () => undefined,
+    tool_call: {
+      guard: () => undefined,
+      observe: () => undefined,
+    },
   }],
 });
 `;
@@ -236,5 +244,136 @@ describe("real Pi adapter: Read-Only Safe Mode provenance", () => {
 
       expect(result).toBeUndefined();
     });
+  }, 30_000);
+});
+
+function effectMapperExtension(): string {
+  return `
+import { createPiHooksExtension } from ${JSON.stringify(hooksExtensionPath)};
+
+export default createPiHooksExtension({
+  modules: [
+    {
+      id: "mapper",
+      input: {
+        guard: ({ input }: { input: Record<string, unknown> }) =>
+          input.text === "reject me" ? { decision: "deny", reason: "rejected by mapper" } : undefined,
+        transform: ({ input }: { input: Record<string, unknown> }) =>
+          typeof input.text === "string" && input.text.startsWith("expand:")
+            ? { text: input.text.slice("expand:".length) }
+            : undefined,
+      },
+      tool_call: {
+        context: () => ({ context: "tool-call-hint" }),
+      },
+      tool_result: {
+        patch: () => ({ content: [{ type: "text", text: "patched result" }] }),
+      },
+      context: {
+        transform: ({ input }: { input: { messages: unknown[] } }) => ({
+          messages: [...input.messages, { role: "user", content: "appended-by-module" }],
+        }),
+      },
+    },
+    {
+      id: "rewriter",
+      tool_call: {
+        transform: ({ input }: { input: Record<string, unknown> }) =>
+          typeof input.command === "string" && input.command.startsWith("raw:")
+            ? { input: { command: input.command.slice("raw:".length) } }
+            : undefined,
+        internalFinal: ({ input }: { input: Record<string, unknown> }) =>
+          typeof input.command === "string" && input.command.includes("forbidden")
+            ? { decision: "deny", reason: "final revalidation denied host-final input" }
+            : undefined,
+      },
+    },
+  ],
+});
+`;
+}
+
+const mapperConfig = JSON.stringify({
+  schemaVersion: 1,
+  modules: [{ id: "mapper", enabled: true }, { id: "rewriter", enabled: true }],
+});
+
+describe("real Pi adapter: effect-bearing event mappings", () => {
+  it("applies input transform through Pi and preserves prior images when a transform omits images", async () => {
+    await withLoadedSession(
+      { config: mapperConfig, extraExtensionSource: effectMapperExtension(), skipHooksExtension: true },
+      async (session) => {
+        const images = [{ type: "image", data: "aGk=", mimeType: "image/png" }];
+        const result = await session.extensionRunner!.emitInput("expand:hello", images as never, "user" as never);
+        expect(result).toMatchObject({ action: "transform", text: "hello" });
+        expect((result as { images?: unknown[] }).images).toEqual(images);
+      },
+    );
+  }, 30_000);
+
+  it("maps an input guard deny to Pi handled so later transforms never run", async () => {
+    await withLoadedSession(
+      { config: mapperConfig, extraExtensionSource: effectMapperExtension(), skipHooksExtension: true },
+      async (session) => {
+        const result = await session.extensionRunner!.emitInput("reject me", undefined, "user" as never);
+        expect(result).toMatchObject({ action: "handled" });
+      },
+    );
+  }, 30_000);
+
+  it("applies full tool_call input replacement and revalidates the exact host-final input", async () => {
+    await withLoadedSession(
+      { config: mapperConfig, extraExtensionSource: effectMapperExtension(), skipHooksExtension: true },
+      async (session) => {
+        const allowed = { type: "tool_call", toolName: "bash", toolCallId: "replace", input: { command: "raw:echo ok", stale: true } };
+        const allowedResult = await session.extensionRunner!.emitToolCall(allowed as never);
+        expect(allowedResult).toBeUndefined();
+        expect(allowed.input).toEqual({ command: "echo ok" });
+
+        const denied = { type: "tool_call", toolName: "bash", toolCallId: "revalidate", input: { command: "raw:forbidden thing" } };
+        const deniedResult = await session.extensionRunner!.emitToolCall(denied as never);
+        expect(deniedResult).toMatchObject({ block: true, reason: "final revalidation denied host-final input" });
+      },
+    );
+  }, 30_000);
+
+  it("applies a chained partial tool_result patch through Pi", async () => {
+    await withLoadedSession(
+      { config: mapperConfig, extraExtensionSource: effectMapperExtension(), skipHooksExtension: true },
+      async (session) => {
+        const result = await session.extensionRunner!.emitToolResult({
+          type: "tool_result",
+          toolName: "bash",
+          toolCallId: "patchable",
+          input: { command: "echo hi" },
+          content: [{ type: "text", text: "original result" }],
+          details: { exitCode: 0 },
+          isError: false,
+        } as never);
+        expect(result).toBeDefined();
+        expect((result as { content: Array<{ text: string }> }).content).toEqual([{ type: "text", text: "patched result" }]);
+      },
+    );
+  }, 30_000);
+
+  it("applies chained context replacement and drains queued tool context exactly once", async () => {
+    await withLoadedSession(
+      { config: mapperConfig, extraExtensionSource: effectMapperExtension(), skipHooksExtension: true },
+      async (session) => {
+        const queued = { type: "tool_call", toolName: "bash", toolCallId: "queue", input: { command: "echo hi" } };
+        await session.extensionRunner!.emitToolCall(queued as never);
+
+        const first = await session.extensionRunner!.emitContext([{ role: "user", content: "original" }] as never);
+        const firstText = JSON.stringify(first);
+        expect(firstText).toContain("original");
+        expect(firstText).toContain("appended-by-module");
+        expect(firstText).toContain("tool-call-hint");
+
+        const second = await session.extensionRunner!.emitContext([{ role: "user", content: "original" }] as never);
+        const secondText = JSON.stringify(second);
+        expect(secondText).toContain("appended-by-module");
+        expect(secondText).not.toContain("tool-call-hint");
+      },
+    );
   }, 30_000);
 });

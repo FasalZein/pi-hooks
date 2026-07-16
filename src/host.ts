@@ -4,10 +4,26 @@ import { AuditLog } from "./audit.js";
 import { cloneDeep, frozenView } from "./isolate.js";
 import { loadGlobalConfig, type GlobalConfig } from "./config.js";
 import { preparePolicy } from "./policy.js";
-import type { AuditRecord, DispatchContext, DispatchResult, HookModule, HookPhase, HostStatus, NormalizedEvent } from "./types.js";
+import type {
+  AuditRecord,
+  ContextDispatchResult,
+  DispatchContext,
+  DispatchResult,
+  HookDecision,
+  HookInvocation,
+  HookModule,
+  HookPhase,
+  HostStatus,
+  InputDispatchResult,
+  NormalizedEvent,
+  ObserveOnlyEventType,
+  ToolCallDispatchResult,
+  ToolResultDispatchResult,
+  ToolResultPatch,
+} from "./types.js";
 
 const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
-const EFFECT_BEARING = new Set<NormalizedEvent["type"]>(["input", "tool_call", "tool_result"]);
+const EFFECT_BEARING = new Set<NormalizedEvent["type"]>(["input", "tool_call", "tool_result", "context"]);
 const FINAL_BOUNDARY = "Authoritative only inside this Host tool_call handler; a later Pi extension can still mutate input before execution.";
 
 export interface CreateHookHostOptions {
@@ -46,9 +62,16 @@ export async function createHookHost(options: CreateHookHostOptions = {}): Promi
   return host;
 }
 
+interface PhaseState {
+  decision: HookDecision;
+  reason?: string;
+}
+
 class Host implements HookHost {
   private runtimeFailure?: string;
   private readonly configFailure?: string;
+  /** Queued module context effects, drained exactly once on the next real context event. */
+  private readonly queuedContext: string[] = [];
 
   constructor(
     private readonly configPath: string,
@@ -101,79 +124,266 @@ class Host implements HookHost {
 
   async dispatch(event: NormalizedEvent, context: DispatchContext): Promise<DispatchResult> {
     if (this.isSafeMode()) return this.safeModeDispatch(event, context);
+    switch (event.type) {
+      case "input":
+        return this.dispatchInput(event, context);
+      case "tool_call":
+        return this.dispatchToolCall(event, context);
+      case "tool_result":
+        return this.dispatchToolResult(event, context);
+      case "context":
+        return this.dispatchContext(event, context);
+      default:
+        return this.dispatchObserveOnly(event, context);
+    }
+  }
 
+  private async dispatchInput(event: NormalizedEvent, context: DispatchContext): Promise<InputDispatchResult> {
+    const input = cloneDeep(event.input);
+    const state: PhaseState = { decision: "allow" };
+    let mutated = false;
+    let images: unknown[] | undefined;
+
+    await this.runPhase(
+      "guard", event, context, state, input,
+      (module) => module.input?.guard?.bind(module.input),
+      async (moduleId, result) => {
+        if (result.decision !== "deny") return;
+        state.decision = "deny";
+        state.reason = result.reason ?? `Denied by ${moduleId}`;
+        await this.writeDecision(moduleId, event, context, "guard", "deny", state.reason, input);
+      },
+    );
+    await this.runPhase(
+      "transform", event, context, state, input,
+      (module) => module.input?.transform?.bind(module.input),
+      async (moduleId, result) => {
+        input.text = result.text;
+        if (result.images !== undefined) {
+          images = cloneDeep(result.images);
+          input.images = images;
+        }
+        mutated = true;
+        await this.writeDecision(moduleId, event, context, "transform", "mutate", undefined, input);
+      },
+    );
+    await this.observePhase(event, context, state, input, []);
+    await this.terminalAllow(event, context, state, input);
+
+    return {
+      event: "input",
+      decision: state.decision,
+      reason: state.reason,
+      mutated,
+      text: typeof input.text === "string" ? input.text : undefined,
+      ...(images !== undefined ? { images } : {}),
+    };
+  }
+
+  private async dispatchToolCall(event: NormalizedEvent, context: DispatchContext): Promise<ToolCallDispatchResult> {
     let input = cloneDeep(event.input);
-    let decision: "allow" | "deny" = "allow";
-    let reason: string | undefined;
+    const state: PhaseState = { decision: "allow" };
     let mutated = false;
     const contextAdditions: string[] = [];
 
+    await this.runPhase(
+      "guard", event, context, state, input,
+      (module) => module.tool_call?.guard?.bind(module.tool_call),
+      async (moduleId, result) => {
+        if (result.decision !== "deny") return;
+        state.decision = "deny";
+        state.reason = result.reason ?? `Denied by ${moduleId}`;
+        await this.writeDecision(moduleId, event, context, "guard", "deny", state.reason, input);
+      },
+    );
+    await this.runPhase(
+      "transform", event, context, state, () => input,
+      (module) => module.tool_call?.transform?.bind(module.tool_call),
+      async (moduleId, result) => {
+        input = cloneDeep(result.input);
+        mutated = true;
+        await this.writeDecision(moduleId, event, context, "transform", "mutate", undefined, input);
+      },
+    );
+    await this.runPhase(
+      "internal-final", event, context, state, () => input,
+      (module) => module.tool_call?.internalFinal?.bind(module.tool_call),
+      async (moduleId, result) => {
+        if (result.decision !== "deny") return;
+        state.decision = "deny";
+        state.reason = result.reason ?? `Denied by ${moduleId}`;
+        await this.writeDecision(moduleId, event, context, "internal-final", "deny", state.reason, input);
+      },
+    );
+    await this.runPhase(
+      "context", event, context, state, () => input,
+      (module) => module.tool_call?.context?.bind(module.tool_call),
+      (moduleId, result) => {
+        contextAdditions.push(...(typeof result.context === "string" ? [result.context] : result.context));
+      },
+    );
+    await this.observePhase(event, context, state, input, contextAdditions);
+    if (state.decision === "allow") this.queuedContext.push(...contextAdditions);
+    await this.terminalAllow(event, context, state, input);
+
+    return { event: "tool_call", decision: state.decision, reason: state.reason, mutated, input, contextAdditions };
+  }
+
+  private async dispatchToolResult(event: NormalizedEvent, context: DispatchContext): Promise<ToolResultDispatchResult> {
+    const input = cloneDeep(event.input);
+    const state: PhaseState = { decision: "allow" };
+    const patch: ToolResultPatch = {};
+    let patched = false;
+    const contextAdditions: string[] = [];
+    const current = (): ToolResultPatch => ({
+      content: patch.content !== undefined ? patch.content : event.payload.content,
+      details: patch.details !== undefined ? patch.details : event.payload.details,
+      isError: patch.isError !== undefined ? patch.isError : event.isError,
+    });
+
+    await this.runPhase(
+      "transform", event, context, state, input,
+      (module) => module.tool_result?.patch?.bind(module.tool_result),
+      async (moduleId, result) => {
+        if (result.content !== undefined) patch.content = cloneDeep(result.content);
+        if (result.details !== undefined) patch.details = cloneDeep(result.details);
+        if (result.isError !== undefined) patch.isError = result.isError;
+        patched = true;
+        await this.writeDecision(moduleId, event, context, "transform", "mutate", undefined, input);
+      },
+      () => frozenView(current()),
+    );
+    await this.runPhase(
+      "context", event, context, state, input,
+      (module) => module.tool_result?.context?.bind(module.tool_result),
+      (moduleId, result) => {
+        contextAdditions.push(...(typeof result.context === "string" ? [result.context] : result.context));
+      },
+      () => frozenView(current()),
+    );
+    await this.observePhase(event, context, state, input, contextAdditions);
+    if (state.decision === "allow") this.queuedContext.push(...contextAdditions);
+    await this.terminalAllow(event, context, state, input);
+
+    return {
+      event: "tool_result",
+      decision: state.decision,
+      reason: state.reason,
+      ...(patched && state.decision === "allow" ? { patch } : {}),
+      contextAdditions,
+    };
+  }
+
+  private async dispatchContext(event: NormalizedEvent, context: DispatchContext): Promise<ContextDispatchResult> {
+    let messages = cloneDeep(Array.isArray(event.input.messages) ? event.input.messages : []);
+    const state: PhaseState = { decision: "allow" };
+    let mutated = false;
+
+    await this.runPhase(
+      "transform", event, context, state, () => ({ messages }),
+      (module) => module.context?.transform?.bind(module.context),
+      async (moduleId, result) => {
+        messages = cloneDeep(result.messages);
+        mutated = true;
+        await this.writeDecision(moduleId, event, context, "transform", "mutate", undefined, { messages });
+      },
+    );
+    await this.observePhase(event, context, state, { messages }, []);
+    const queuedContext = state.decision === "allow" ? this.queuedContext.splice(0) : [];
+    await this.terminalAllow(event, context, state, { messages });
+
+    return {
+      event: "context",
+      decision: state.decision,
+      reason: state.reason,
+      ...(mutated && state.decision === "allow" ? { messages } : {}),
+      queuedContext,
+    };
+  }
+
+  private async dispatchObserveOnly(event: NormalizedEvent, context: DispatchContext): Promise<DispatchResult> {
+    const state: PhaseState = { decision: "allow" };
+    await this.observePhase(event, context, state, cloneDeep(event.input), []);
+    return { event: event.type as ObserveOnlyEventType, decision: "allow" };
+  }
+
+  /**
+   * The one shared phase-runner (SLICE-0008): owns deny short-circuiting and
+   * the failure policy in one place — optional-module failures isolate and
+   * degrade runtime health only, required-module failures deny pre-execution,
+   * and observe failures never block.
+   */
+  private async runPhase<R>(
+    phase: HookPhase,
+    event: NormalizedEvent,
+    context: DispatchContext,
+    state: PhaseState,
+    input: Record<string, unknown> | (() => Record<string, unknown>),
+    select: (module: HookModule) => ((invocation: HookInvocation) => void | R | Promise<void | R>) | undefined,
+    apply: (moduleId: string, result: R) => void | Promise<void>,
+    resultView?: () => Readonly<ToolResultPatch>,
+  ): Promise<void> {
     for (const module of this.modules) {
-      if (!module.guard || decision === "deny") continue;
+      const handler = select(module);
+      if (!handler) continue;
+      if (phase !== "observe" && state.decision === "deny") continue;
+      const currentInput = typeof input === "function" ? input() : input;
       try {
-        const result = await module.guard({ event, input: frozenView(input), context });
-        if (result?.decision === "deny") {
-          decision = "deny";
-          reason = result.reason ?? `Denied by ${module.id}`;
-          await this.writeDecision(module.id, event, context, "guard", "deny", reason, input);
+        const invocation: HookInvocation = {
+          event,
+          input: frozenView(currentInput),
+          context,
+          ...(resultView ? { result: resultView() } : {}),
+        };
+        const result = await handler(invocation);
+        if (result !== undefined && result !== null) await apply(module.id, result as R);
+      } catch (error) {
+        const failure = `${module.id} ${phase} failed: ${message(error)}`;
+        this.runtimeFailure = failure;
+        await this.writeDecision(module.id, event, context, phase, "module-failure", failure, currentInput);
+        if (phase !== "observe" && this.requiredById.get(module.id) !== false) {
+          state.decision = "deny";
+          state.reason = failure;
         }
-      } catch (error) {
-        ({ decision, reason } = await this.handleFailure(module, event, context, "guard", error, decision, reason, input));
       }
     }
+  }
 
+  private async observePhase(
+    event: NormalizedEvent,
+    context: DispatchContext,
+    state: PhaseState,
+    input: Record<string, unknown>,
+    contextAdditions: readonly string[],
+  ): Promise<void> {
     for (const module of this.modules) {
-      if (!module.transform || decision === "deny") continue;
+      const handler = observeHandlerOf(module, event.type);
+      if (!handler) continue;
       try {
-        const result = await module.transform({ event, input: frozenView(input), context });
-        if (result) {
-          input = cloneDeep(result.input);
-          mutated = true;
-          await this.writeDecision(module.id, event, context, "transform", "mutate", undefined, input);
-        }
+        await handler({
+          event,
+          input: frozenView(input),
+          context,
+          decision: state.decision,
+          reason: state.reason,
+          contextAdditions,
+        });
       } catch (error) {
-        ({ decision, reason } = await this.handleFailure(module, event, context, "transform", error, decision, reason, input));
+        const failure = `${module.id} observe failed: ${message(error)}`;
+        this.runtimeFailure = failure;
+        await this.writeDecision(module.id, event, context, "observe", "module-failure", failure, input);
       }
     }
+  }
 
-    for (const module of this.modules) {
-      if (!module.internalFinal || decision === "deny") continue;
-      try {
-        const result = await module.internalFinal({ event, input: frozenView(input), context });
-        if (result?.decision === "deny") {
-          decision = "deny";
-          reason = result.reason ?? `Denied by ${module.id}`;
-          await this.writeDecision(module.id, event, context, "internal-final", "deny", reason, input);
-        }
-      } catch (error) {
-        ({ decision, reason } = await this.handleFailure(module, event, context, "internal-final", error, decision, reason, input));
-      }
-    }
-
-    for (const module of this.modules) {
-      if (!module.context || decision === "deny") continue;
-      try {
-        const result = await module.context({ event, input: frozenView(input), context });
-        if (result) contextAdditions.push(...(typeof result.context === "string" ? [result.context] : result.context));
-      } catch (error) {
-        ({ decision, reason } = await this.handleFailure(module, event, context, "context", error, decision, reason, input));
-      }
-    }
-
-    for (const module of this.modules) {
-      if (!module.observe) continue;
-      try {
-        await module.observe({ event, input: frozenView(input), context, decision, reason, contextAdditions });
-      } catch (error) {
-        await this.handleFailure(module, event, context, "observe", error, decision, reason, input);
-      }
-    }
-
-    if (decision === "allow" && EFFECT_BEARING.has(event.type)) {
-      await this.writeDecision("host", event, context, "host", "allow", undefined, input);
-    }
-
-    return { decision, reason, mutated, input, contextAdditions };
+  private async terminalAllow(
+    event: NormalizedEvent,
+    context: DispatchContext,
+    state: PhaseState,
+    input: Record<string, unknown>,
+  ): Promise<void> {
+    if (state.decision !== "allow" || !EFFECT_BEARING.has(event.type)) return;
+    await this.writeDecision("host", event, context, "host", "allow", undefined, input);
   }
 
   private isSafeMode(): boolean {
@@ -181,36 +391,31 @@ class Host implements HookHost {
   }
 
   private async safeModeDispatch(event: NormalizedEvent, context: DispatchContext): Promise<DispatchResult> {
-    const allow = event.type !== "tool_call"
-      || READ_ONLY_TOOLS.has(event.toolName ?? "") && event.provenance?.source === "builtin";
-    const reason = allow
-      ? undefined
-      : "Denied by Read-Only Safe Mode: trusted global configuration is invalid and only built-in read-only tools with trusted provenance may run";
-    if (!allow) await this.writeDecision("host", event, context, "host", "deny", reason, event.input);
-    return {
-      decision: allow ? "allow" : "deny",
-      reason,
-      mutated: false,
-      input: cloneDeep(event.input),
-      contextAdditions: [],
-    };
-  }
-
-  private async handleFailure(
-    module: HookModule,
-    event: NormalizedEvent,
-    context: DispatchContext,
-    phase: HookPhase,
-    error: unknown,
-    decision: "allow" | "deny",
-    reason: string | undefined,
-    input: Record<string, unknown>,
-  ): Promise<{ decision: "allow" | "deny"; reason?: string }> {
-    const failure = `${module.id} ${phase} failed: ${message(error)}`;
-    this.runtimeFailure = failure;
-    await this.writeDecision(module.id, event, context, phase, "module-failure", failure, input);
-    if (phase !== "observe" && this.requiredById.get(module.id) !== false) return { decision: "deny", reason: failure };
-    return { decision, reason };
+    if (event.type === "tool_call") {
+      const allow = READ_ONLY_TOOLS.has(event.toolName ?? "") && event.provenance?.source === "builtin";
+      const reason = allow
+        ? undefined
+        : "Denied by Read-Only Safe Mode: trusted global configuration is invalid and only built-in read-only tools with trusted provenance may run";
+      if (!allow) await this.writeDecision("host", event, context, "host", "deny", reason, event.input);
+      return {
+        event: "tool_call",
+        decision: allow ? "allow" : "deny",
+        reason,
+        mutated: false,
+        input: cloneDeep(event.input),
+        contextAdditions: [],
+      };
+    }
+    switch (event.type) {
+      case "input":
+        return { event: "input", decision: "allow", mutated: false, text: typeof event.input.text === "string" ? event.input.text : undefined };
+      case "tool_result":
+        return { event: "tool_result", decision: "allow", contextAdditions: [] };
+      case "context":
+        return { event: "context", decision: "allow", queuedContext: [] };
+      default:
+        return { event: event.type as ObserveOnlyEventType, decision: "allow" };
+    }
   }
 
   private async writeDecision(
@@ -233,6 +438,11 @@ class Host implements HookHost {
       inputSummary: input,
     });
   }
+}
+
+function observeHandlerOf(module: HookModule, type: NormalizedEvent["type"]) {
+  const group = module[type];
+  return group?.observe?.bind(group);
 }
 
 function defaultConfigPath(): string {
