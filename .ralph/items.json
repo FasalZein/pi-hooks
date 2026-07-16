@@ -1,0 +1,111 @@
+{
+  "version": 1,
+  "runtime_contract": {
+    "source_docs": [],
+    "verification_gates": [
+      { "name": "verify", "command": "npm run verify" }
+    ],
+    "require_progress_append": true,
+    "require_one_item_per_iteration": true,
+    "require_commit": true
+  },
+  "items": [
+    {
+      "category": "tooling",
+      "description": "Lint gate: ESLint (flat config, typescript-eslint recommended) covers src/ and test/, provably lints the real files, the repo is lint-clean, and npm run verify runs typecheck + lint + tests.",
+      "steps": [
+        "Add eslint and typescript-eslint as devDependencies with an eslint.config.js flat config covering src/**/*.ts and test/**/*.ts using the typescript-eslint recommended ruleset",
+        "Prove the linter bites: temporarily introduce an unused variable in a src file, run npm run lint, confirm it is flagged and that the reported linted-file count is nonzero, then revert the violation; record this evidence in .ralph/progress.md",
+        "Add script \"lint\": \"eslint src test\" and change \"verify\" to run typecheck, lint, and test",
+        "Run npm run lint, fix every finding in repo code without weakening any runtime behavior or test assertion (rule-level disables allowed only with a justifying comment)",
+        "Run npm run verify and confirm typecheck, lint, and the full vitest suite all pass"
+      ],
+      "passes": false,
+      "regression_notes": ""
+    },
+    {
+      "category": "functional",
+      "description": "Rule matching and allow/deny composition: the bundled Policy Engine provider matches tool name, active provenance, and normalized input; deny beats allow; the outcome (decision, winning rule id, severity in the reason string) is deterministic regardless of rule order and object key order. Ask and hard-deny severities are NOT in scope here (items 4 and 5 own them).",
+      "steps": [
+        "Write a failing test in test/policy-engine.test.ts at the direct dispatch seam (DefaultResourceLoader + createAgentSession + emitToolCall; reuse helpers from test/providers.test.ts): configure rules under providers[].config.rules per the plan's rule contract, emit a tool_call, and assert the block decision and that the reason carries the winning rule id and severity",
+        "Cover matching on tool name, provenance, and normalized-input matchers; deny-beats-allow composition; and determinism: identical decision, winning rule id, and reason with the rules array reordered and with object keys reordered; include a same-severity tie resolved by lexicographically smallest rule id",
+        "Run the tests, confirm red, summarize the red output in .ralph/progress.md",
+        "Implement src/policy-engine.ts as a config-driven provider on the events grant lane with a TypeBox configSchema for rules, bundle it in src/index.ts's default export (createPiHooksExtension({ providers: [policyEngineProvider] })), and run npm run verify green"
+      ],
+      "passes": false,
+      "regression_notes": ""
+    },
+    {
+      "category": "functional",
+      "description": "Confirm-only interaction grant: a provider declaring the interaction grant can call confirm through a live-bound broker; when hasUI is false, confirm returns the caller-supplied noUiOutcome immediately without waiting; an undeclared provider's interaction access is refused via the existing refusal-proxy pattern with a grant-refused audit record.",
+      "steps": [
+        "Write a failing test at the direct dispatch seam with a fixture provider declaring the interaction grant: with uiContext injected via session.bindExtensions({ uiContext }) reporting hasUI=false, confirm(request, { noUiOutcome: 'denied' }) resolves immediately to 'denied'; with hasUI=true and a stubbed ctx.ui.confirm, the stub receives the request and its answer is returned",
+        "Add a case where a provider without the interaction grant touches the interaction facade: refusal proxy throws and a grant-refused audit record is written (existing GRANT_KINDS refusal pattern)",
+        "Run red, record evidence in .ralph/progress.md",
+        "Implement the interaction grant kind in src/grants.ts + src/providers.ts and the broker in createHookHost (Host updates the broker's current DispatchContext per dispatch); extend DispatchContext.ui additively with confirm via one internal wider type for the Pi ui surface (the nine-event HookModule contract stays unchanged); run npm run verify green"
+      ],
+      "passes": false,
+      "regression_notes": ""
+    },
+    {
+      "category": "functional",
+      "description": "Ask severity with fail-closed unattended safety: ask outranks allow in composition; with no UI an ask-matched tool_call resolves immediately to deny (fail-closed) and the tool never executes; with UI the session asks exactly once for the exact elevated action, allowing on accept and denying on reject.",
+      "steps": [
+        "Write failing tests: at the direct dispatch seam, ask + allow rules matching together compose to ask (winning rule id and 'ask' severity in the reason) and resolve to a block when hasUI=false",
+        "At the scripted agent turn seam (deterministic session.agent.streamFn requesting a marker tool), prove the marker tool never executes under unattended ask-deny, and with hasUI=true and a stubbed confirm prove the prompt fires exactly once for the action, the tool executes once on accept, and is blocked on reject",
+        "Run red, record evidence in .ralph/progress.md",
+        "Implement ask handling in src/policy-engine.ts using the item-3 interaction grant (confirm at tool_call.guard with noUiOutcome=deny); run npm run verify green"
+      ],
+      "passes": false,
+      "regression_notes": ""
+    },
+    {
+      "category": "functional",
+      "description": "Hard-deny is top-ranked, unapprovable, and unrelaxable: hard-deny outranks allow, ask, and deny; no confirm prompt is shown for it; no rule from any layered rule source inside the provider config relaxes it; the full allow < ask < deny < hard-deny lattice is deterministic.",
+      "steps": [
+        "Write failing tests at the direct dispatch seam: a hard-deny-matched tool_call is blocked even when allow and ask rules also match, and a stubbed confirm is never invoked for it",
+        "Add a layered-source case inside the provider's own config (project-file layering is SLICE-0010, out of scope): an allow rule for the same tool in a second rule source does not relax the hard-deny — composition is monotonic",
+        "Add a full-lattice determinism case now that all four severities exist: decision, winning rule id, and reason identical under rules-array and object-key reordering",
+        "Run red, record evidence in .ralph/progress.md, implement the hard-deny short-circuit, run npm run verify green"
+      ],
+      "passes": false,
+      "regression_notes": ""
+    },
+    {
+      "category": "functional",
+      "description": "Host-final approval fingerprints: an interactive approval is a SHA256 fingerprint over canonical JSON of the exact Host-final tool name and full input, stored Host-lived, single-use, expiring (default TTL 300s), validated and consumed at tool_call.internalFinal; any Host-owned input change after approval denies without re-asking.",
+      "steps": [
+        "Write failing tests at the scripted agent turn seam: an approved elevated tool_call executes exactly once (marker evidence); replaying the identical call afterwards requires a new approval (single-use); an approval past its TTL (fake timers or injected clock) is not honored",
+        "Add the intra-dispatch case at the direct dispatch seam: a module transform changes the input between guard approval and internalFinal — the fingerprint misses, the call is denied, and the confirm stub is not invoked a second time",
+        "Run red, record evidence in .ralph/progress.md",
+        "Implement the fingerprint store (compute at tool_call.guard, validate + consume over Host-final input at tool_call.internalFinal); run npm run verify green"
+      ],
+      "passes": false,
+      "regression_notes": ""
+    },
+    {
+      "category": "functional",
+      "description": "Provider-tool parity: a tool registered by another capability provider is gated by the same rules with the same outcomes as a built-in tool at the same observed tool_call boundary. Likely verification-only — if no gating gap exists, do not invent a fix.",
+      "steps": [
+        "Write a test at the scripted agent turn seam where a second provider registers a marker tool via its tools grant (reuse toolProviderSource from test/providers.test.ts) and a deny rule targets it: the provider tool never executes and the blocked outcome matches the same rule denying a built-in tool",
+        "Assert the denial reason (winning rule id, severity) is identical in shape for both; do not assert target-tool provenance inside audit records (audit provider attribution keeps its existing meaning)",
+        "If the test is red, record evidence in .ralph/progress.md and implement the gap; if it is green because all tool_calls already flow through the same dispatch path, record that finding in .ralph/progress.md and keep the test as the parity pin — this item is then test-only",
+        "Run npm run verify green"
+      ],
+      "passes": false,
+      "regression_notes": ""
+    },
+    {
+      "category": "functional",
+      "description": "Agent-first denial and ask messages: every denial (and unattended ask-resolved-to-deny, once item 4 exists) surfaces the matched rule id, its scope, and a concrete remedy in the model-visible tool output, following Pi tool-output conventions, with no universal-enforcement or OS-containment claims.",
+      "steps": [
+        "Write failing tests at the scripted agent turn seam asserting the blocked tool call's model-visible tool result contains the matched rule id, the rule's scope, and its concrete remedy text, and contains no claim of OS-level or universal enforcement",
+        "Cover a plain deny message and, if item 4 has landed, an unattended ask-resolved-to-deny message; also assert the direct dispatch reason string carries the same rule id and severity",
+        "Run red, record evidence in .ralph/progress.md",
+        "Implement the message formatter in src/policy-engine.ts consuming the rule's id/scope/remedy fields; run npm run verify green"
+      ],
+      "passes": false,
+      "regression_notes": ""
+    }
+  ]
+}
