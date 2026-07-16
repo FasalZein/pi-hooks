@@ -49,7 +49,6 @@ export interface ObserveInvocation extends HookInvocation {
 
 export interface HookModule {
   id: string;
-  required?: boolean;
   requires?: readonly string[];
   before?: readonly string[];
   after?: readonly string[];

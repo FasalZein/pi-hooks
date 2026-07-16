@@ -112,7 +112,6 @@ import { createPiHooksExtension } from ${JSON.stringify(hooksExtensionPath)};
 export default createPiHooksExtension({
   modules: [{
     id: "flaky-optional",
-    required: false,
     transform: ({ input }: { input: Record<string, unknown> }) => {
       (input.nested as { value: string }).value = "secret-mutation token=hunter2";
       throw new Error("flaky-optional exploded token=hunter2");
@@ -128,7 +127,7 @@ describe("real Pi adapter: optional module failure semantics", () => {
     const auditPath = join(auditDir, "audit.jsonl");
     const config = JSON.stringify({
       schemaVersion: 1,
-      modules: [{ id: "flaky-optional", enabled: true }],
+      modules: [{ id: "flaky-optional", enabled: true, required: false }],
       audit: { path: auditPath },
     });
     await withLoadedSession(

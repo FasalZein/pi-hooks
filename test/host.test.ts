@@ -210,6 +210,40 @@ describe("ordering and effective policy validation", () => {
     expect(host.status().phaseOrder.guard).toEqual(["a", "b", "c"]);
   });
 
+  it("sources requiredness from trusted global config: missing optional degrades, missing required enters safe mode", async () => {
+    const optionalMissing = await fixture(JSON.stringify({
+      schemaVersion: 1,
+      modules: [{ id: "present", enabled: true }, { id: "ghost", enabled: true, required: false }],
+    }));
+    const degradedHost = await createHookHost({
+      configPath: optionalMissing.configPath,
+      modules: [{ id: "present", guard: () => undefined }],
+    });
+    const status = degradedHost.status();
+    expect(status.mode).toBe("normal");
+    expect(status.configHealth).toBe("valid");
+    expect(status.modules).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "present", enabled: true, required: true }),
+      expect.objectContaining({ id: "ghost", enabled: false, required: false }),
+    ]));
+    const dispatched = await degradedHost.dispatch(
+      normalizeEvent("tool_call", { toolName: "bash", toolCallId: "opt", input: { command: "echo hi" } }),
+      ctx as never,
+    );
+    expect(dispatched.decision).toBe("allow");
+
+    const requiredMissing = await fixture(JSON.stringify({
+      schemaVersion: 1,
+      modules: [{ id: "ghost", enabled: true }],
+    }));
+    const safeHost = await createHookHost({ configPath: requiredMissing.configPath, modules: [] });
+    expect(safeHost.status()).toMatchObject({
+      mode: "read-only-safe",
+      configHealth: "invalid",
+      lastFailure: expect.stringContaining("ghost"),
+    });
+  });
+
   it("rejects duplicate available module ids before any lookup can collapse them", async () => {
     const { configPath } = await fixture(validConfig(["dup"]));
     const host = await createHookHost({
@@ -292,12 +326,12 @@ describe("configuration, safe mode, audit, and status", () => {
     const failed = await fixture(validConfig());
     await writeFile(failed.configPath, JSON.stringify({
       schemaVersion: 1,
-      modules: [{ id: "optional" }],
+      modules: [{ id: "optional", required: false }],
       audit: { path: failed.auditPath },
     }));
     const host = await createHookHost({
       configPath: failed.configPath,
-      modules: [{ id: "optional", required: false, guard: () => { throw new Error("boom"); } }],
+      modules: [{ id: "optional", guard: () => { throw new Error("boom"); } }],
     });
     const result = await host.dispatch(normalizeEvent("tool_call", { toolName: "read", toolCallId: "f", input: { path: "x" } }), ctx as never);
     expect(result.decision).toBe("allow");
@@ -309,7 +343,6 @@ describe("configuration, safe mode, audit, and status", () => {
     const secrets = ["bearer-secret", "query-token", "url-password", "error-password", "input-token"];
     const module: HookModule = {
       id: "audit-policy",
-      required: false,
       guard: () => { throw new Error("request failed password=error-password"); },
       transform: ({ input }) => ({ input: { ...input, password: "do-not-log" } }),
       internalFinal: () => ({
@@ -320,7 +353,7 @@ describe("configuration, safe mode, audit, and status", () => {
     const { configPath, auditPath } = await fixture(validConfig());
     await writeFile(configPath, JSON.stringify({
       schemaVersion: 1,
-      modules: [{ id: "audit-policy", enabled: true }],
+      modules: [{ id: "audit-policy", enabled: true, required: false }],
       audit: { path: auditPath },
     }));
     const host = await createHookHost({ configPath, modules: [module] });

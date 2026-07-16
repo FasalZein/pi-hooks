@@ -15,7 +15,8 @@
         "required": ["id"],
         "properties": {
           "id": { "type": "string", "minLength": 1 },
-          "enabled": { "type": "boolean", "default": true }
+          "enabled": { "type": "boolean", "default": true },
+          "required": { "type": "boolean", "default": true }
         }
       }
     },

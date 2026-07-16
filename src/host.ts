@@ -26,6 +26,7 @@ export async function createHookHost(options: CreateHookHostOptions = {}): Promi
   let config: GlobalConfig | undefined;
   let modules: HookModule[] = [];
   let phaseOrder = emptyPhaseOrder();
+  let required = new Map<string, boolean>();
   let failure: string | undefined;
 
   try {
@@ -35,12 +36,12 @@ export async function createHookHost(options: CreateHookHostOptions = {}): Promi
   }
   if (config) {
     const policy = preparePolicy(available, config);
-    if (policy.ok) ({ modules, phaseOrder } = policy);
+    if (policy.ok) ({ modules, phaseOrder, required } = policy);
     else failure = policy.failure;
   }
 
   const audit = new AuditLog(config?.audit?.path, config?.audit?.includeAllows);
-  const host = new Host(configPath, config, modules, phaseOrder, audit, failure, available);
+  const host = new Host(configPath, config, modules, phaseOrder, required, audit, failure);
   if (failure) await host.recordSafeMode(failure);
   return host;
 }
@@ -54,9 +55,9 @@ class Host implements HookHost {
     private readonly config: GlobalConfig | undefined,
     private readonly modules: HookModule[],
     private readonly phaseOrder: Record<HookPhase, string[]>,
+    private readonly requiredById: Map<string, boolean>,
     private readonly audit: AuditLog,
     failure: string | undefined,
-    private readonly availableModules: HookModule[],
   ) {
     this.lastFailure = failure;
   }
@@ -74,7 +75,7 @@ class Host implements HookHost {
 
   status(): HostStatus {
     const valid = !this.lastFailure || this.config !== undefined && this.modules.length >= 0 && !this.isSafeMode();
-    const configured = this.config?.modules ?? this.availableModules.map((module) => ({ id: module.id, enabled: false }));
+    const configured = this.config?.modules ?? [];
     const enabledIds = new Set(this.modules.map((module) => module.id));
     const audit = this.audit.status();
     return {
@@ -84,7 +85,7 @@ class Host implements HookHost {
       modules: configured.map((entry) => ({
         id: entry.id,
         enabled: enabledIds.has(entry.id),
-        required: this.availableModules.find((module) => module.id === entry.id)?.required !== false,
+        required: entry.required !== false,
       })),
       phaseOrder: this.phaseOrder,
       mode: this.isSafeMode() ? "read-only-safe" : "normal",
@@ -205,7 +206,7 @@ class Host implements HookHost {
     this.degraded = true;
     this.lastFailure = failure;
     await this.writeDecision(module.id, event, context, phase, "module-failure", failure, input);
-    if (phase !== "observe" && module.required !== false) return { decision: "deny", reason: failure };
+    if (phase !== "observe" && this.requiredById.get(module.id) !== false) return { decision: "deny", reason: failure };
     return { decision, reason };
   }
 

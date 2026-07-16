@@ -12,6 +12,8 @@ export interface EffectivePolicy {
   ok: true;
   modules: HookModule[];
   phaseOrder: Record<HookPhase, string[]>;
+  /** Requiredness per configured module id, sourced only from trusted global entries (default true). */
+  required: Map<string, boolean>;
 }
 
 export interface PolicyFailure {
@@ -28,18 +30,23 @@ export function preparePolicy(available: readonly HookModule[], config: GlobalCo
 
   const byId = new Map(available.map((module) => [module.id, module]));
   const configuredIds = new Set<string>();
+  const required = new Map<string, boolean>();
   const enabled: HookModule[] = [];
   for (const entry of config.modules) {
     if (configuredIds.has(entry.id)) return { ok: false, failure: `Duplicate configured module id: ${entry.id}` };
     configuredIds.add(entry.id);
+    required.set(entry.id, entry.required !== false);
     if (entry.enabled === false) continue;
     const module = byId.get(entry.id);
-    if (!module) return { ok: false, failure: `Configured module is unavailable: ${entry.id}` };
+    if (!module) {
+      if (entry.required === false) continue;
+      return { ok: false, failure: `Configured required module is unavailable: ${entry.id}` };
+    }
     enabled.push(module);
   }
 
   try {
-    return { ok: true, ...resolveOrder(enabled) };
+    return { ok: true, ...resolveOrder(enabled), required };
   } catch (error) {
     return { ok: false, failure: error instanceof Error ? error.message : String(error) };
   }

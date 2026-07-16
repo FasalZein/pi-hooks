@@ -4,7 +4,7 @@ import { Value } from "typebox/value";
 
 export interface GlobalConfig {
   schemaVersion: 1;
-  modules: Array<{ id: string; enabled?: boolean }>;
+  modules: Array<{ id: string; enabled?: boolean; required?: boolean }>;
   audit?: { path?: string; includeAllows?: boolean };
 }
 
