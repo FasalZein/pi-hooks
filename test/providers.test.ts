@@ -403,3 +403,62 @@ describe("SLICE-0009 AC4: schemaVersion 2 migration and safe-mode fallback", () 
     expect(host.status().configuration.health).toBe("invalid");
   });
 });
+
+describe("SLICE-0009 AC5: status lists providers and audit carries provider attribution", () => {
+  it("lists every provider with source, declared grants, and per-provider health (detached status)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-hooks-status-"));
+    const configPath = join(dir, "pi-hooks.jsonc");
+    await writeFile(configPath, JSON.stringify({
+      schemaVersion: 2,
+      providers: [{ id: "healthy", enabled: true }, { id: "broken", enabled: true }],
+    }));
+    const healthy = defineProvider({
+      manifest: { id: "healthy", version: "1.0.0", grants: ["events"] },
+      activate() {},
+    });
+    const broken = defineProvider({
+      manifest: { id: "broken", version: "", grants: ["events"] },
+      activate() {},
+    });
+    const host = await createHookHost({ configPath, providers: [healthy, broken] });
+    const providers = host.status().providers;
+    expect(providers.map((p) => p.id).sort()).toEqual(["broken", "healthy"]);
+    expect(providers.find((p) => p.id === "healthy")).toMatchObject({
+      source: "global",
+      grants: ["events"],
+      health: "healthy",
+    });
+    expect(providers.find((p) => p.id === "broken")?.health).toBe("degraded");
+  });
+
+  it("attributes a provider events-module runtime failure to its provider in the audit log", async () => {
+    const auditDir = await mkdtemp(join(tmpdir(), "pi-hooks-attrib-audit-"));
+    const auditPath = join(auditDir, "audit.jsonl");
+    const source = `
+import { createPiHooksExtension, defineProvider } from ${JSON.stringify(hooksIndexPath)};
+const flaky = defineProvider({
+  manifest: { id: "flaky-provider", version: "1.0.0", grants: ["events"] },
+  activate(facade) {
+    facade.events.registerModule({
+      id: "flaky-mod",
+      tool_call: { guard: () => { throw new Error("flaky module exploded"); } },
+    });
+  },
+});
+export default createPiHooksExtension({ providers: [flaky] });
+`;
+    const config = JSON.stringify({
+      schemaVersion: 2,
+      providers: [{ id: "flaky-provider", enabled: true, required: false }],
+      audit: { path: auditPath },
+    });
+    await withProviderSession({ config, extensionSource: source }, async (session) => {
+      await session.extensionRunner!.emitToolCall({
+        type: "tool_call", toolName: "bash", toolCallId: "a1", input: { command: "echo hi" },
+      } as never);
+      const lines = (await readFile(auditPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+      const failure = lines.find((line) => line.decision === "module-failure" && line.provider === "flaky-provider");
+      expect(failure).toBeDefined();
+    });
+  }, 30_000);
+});

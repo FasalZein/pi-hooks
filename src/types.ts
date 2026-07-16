@@ -1,4 +1,5 @@
 import type { ContextEvent, InputEventResult, ToolResultEvent } from "@earendil-works/pi-coding-agent";
+import type { GrantKind } from "./grants.js";
 
 /** Pi's exact payload types, derived from the public SDK surface. */
 export type PiInputImages = NonNullable<Extract<InputEventResult, { action: "transform" }>["images"]>;
@@ -225,6 +226,16 @@ export interface HostStatus {
     lastFailure?: string;
   };
   modules: Array<{ id: string; enabled: boolean; required: boolean }>;
+  /** Every authorized Capability Provider with its source, grants, and health. */
+  providers: Array<{
+    id: string;
+    source: string;
+    grants: readonly GrantKind[];
+    enabled: boolean;
+    required: boolean;
+    health: "healthy" | "degraded";
+    lastFailure?: string;
+  }>;
   phaseOrder: Record<HookPhase, string[]>;
   mode: "normal" | "read-only-safe";
   /** Audit persistence health lane: append/serialization failures only. */

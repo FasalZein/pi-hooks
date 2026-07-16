@@ -114,6 +114,7 @@ class Host implements HookHost {
   private readonly pendingProcesses: ProviderActivation["processes"];
   private readonly pendingUiOps: ProviderActivation["uiOps"];
   private readonly children: ChildProcess[] = [];
+  private readonly providerByModuleId: Map<string, string>;
   private processesStarted = false;
 
   constructor(
@@ -132,6 +133,7 @@ class Host implements HookHost {
     this.pendingCommands = activation?.commands ?? [];
     this.pendingProcesses = activation?.processes ?? [];
     this.pendingUiOps = activation?.uiOps ?? [];
+    this.providerByModuleId = activation?.providerByModuleId ?? new Map();
     // An isolated provider degrades the runtime lane only; configuration stays
     // valid and the host stays out of safe mode for a single bad provider.
     const degraded = this.providers.find((provider) => provider.health === "degraded");
@@ -208,6 +210,15 @@ class Host implements HookHost {
         id: entry.id,
         enabled: enabledIds.has(entry.id),
         required: entry.required !== false,
+      })),
+      providers: this.providers.map((provider) => ({
+        id: provider.id,
+        source: provider.source,
+        grants: provider.grants,
+        enabled: provider.enabled,
+        required: provider.required,
+        health: provider.health,
+        ...(provider.lastFailure ? { lastFailure: provider.lastFailure } : {}),
       })),
       phaseOrder: this.phaseOrder,
       mode: this.isSafeMode() ? "read-only-safe" : "normal",
@@ -516,10 +527,12 @@ class Host implements HookHost {
     reason: string | undefined,
     input: Record<string, unknown>,
   ): Promise<void> {
+    const provider = this.providerByModuleId.get(moduleId);
     await this.audit.record({
       timestamp: new Date().toISOString(),
       sessionId: context.sessionManager?.getSessionId?.() ?? context.sessionManager?.getSessionFile?.(),
       moduleId,
+      ...(provider ? { provider } : {}),
       eventType: event.type,
       phase,
       decision,

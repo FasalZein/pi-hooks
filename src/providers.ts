@@ -51,6 +51,8 @@ export interface ProviderActivation {
   modules: HookModule[];
   /** Requiredness per contributed module id, inherited from its provider entry. */
   requiredByModuleId: Map<string, boolean>;
+  /** Provider attribution per contributed module id, for audit records. */
+  providerByModuleId: Map<string, string>;
   tools: ToolRegistration[];
   commands: CommandRegistration[];
   processes: ProcessRegistration[];
@@ -77,6 +79,7 @@ export async function activateProviders(
   const activation: ProviderActivation = {
     modules: [],
     requiredByModuleId: new Map(),
+    providerByModuleId: new Map(),
     tools: [],
     commands: [],
     processes: [],
@@ -159,6 +162,7 @@ function collectingWiring(prepared: PreparedProvider, activation: ProviderActiva
       registerModule: (module) => {
         activation.modules.push(module);
         activation.requiredByModuleId.set(module.id, prepared.required);
+        activation.providerByModuleId.set(module.id, prepared.id);
       },
     },
     tools: { registerTool: (tool) => activation.tools.push({ providerId, tool }) },
