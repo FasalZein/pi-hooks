@@ -1,4 +1,7 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { Compile } from "typebox/compile";
+import { Value } from "typebox/value";
+import type { TSchema } from "typebox";
 import type { GlobalConfig, ProviderConfigEntry } from "./config.js";
 import {
   buildFacade,
@@ -107,6 +110,12 @@ export async function activateProviders(
     }
     if (!enabled) continue;
 
+    const configError = validateProviderConfig(manifest.configSchema, entry.config);
+    if (configError) {
+      degrade(prepared, activation, `config invalid: ${configError}`);
+      continue;
+    }
+
     const wiring = collectingWiring(prepared, activation);
     const refuse = (grant: GrantKind, method: string): void => {
       activation.records.push(refusalRecord(manifest.id, grant, method));
@@ -133,6 +142,14 @@ function validateManifest(provider: CapabilityProvider): string | undefined {
   }
   if (typeof provider.activate !== "function") return "missing activate";
   return undefined;
+}
+
+function validateProviderConfig(schema: TSchema | undefined, config: unknown): string | undefined {
+  if (!schema) return undefined;
+  const check = Compile(schema);
+  if (check.Check(config)) return undefined;
+  const errors = [...Value.Errors(schema, config)].map((error) => `${error.instancePath || "/"}: ${error.message}`);
+  return errors.join("; ") || "does not match provider config schema";
 }
 
 function collectingWiring(prepared: PreparedProvider, activation: ProviderActivation): GrantWiring {

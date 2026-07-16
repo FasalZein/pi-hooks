@@ -122,6 +122,10 @@ class Host implements HookHost {
     this.configFailure = failure;
     this.providers = activation?.providers ?? [];
     this.pendingTools = activation?.tools ?? [];
+    // An isolated provider degrades the runtime lane only; configuration stays
+    // valid and the host stays out of safe mode for a single bad provider.
+    const degraded = this.providers.find((provider) => provider.health === "degraded");
+    if (degraded) this.runtimeFailure = `provider ${degraded.id} ${degraded.lastFailure ?? "isolated"}`;
   }
 
   bindPi(bindings: PiGrantBindings): void {

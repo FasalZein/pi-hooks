@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAgentSession, DefaultResourceLoader, SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
+import { Type } from "typebox";
+import { createHookHost, defineProvider } from "../src/index.js";
 
 const hooksIndexPath = fileURLToPath(new URL("../src/index.ts", import.meta.url));
 
@@ -128,4 +130,107 @@ describe("SLICE-0009 AC1: tools grant registration and refusal at the real seam"
       expect(refusal.provider).toBe("sneaky");
     });
   }, 30_000);
+});
+
+/** A valid provider and a config-schema-invalid provider loaded together. */
+function mixedValiditySource(markerPath: string): string {
+  return `
+import { Type } from "typebox";
+import { writeFile } from "node:fs/promises";
+import { createPiHooksExtension, defineProvider } from ${JSON.stringify(hooksIndexPath)};
+
+const good = defineProvider({
+  manifest: { id: "good", version: "1.0.0", grants: ["tools"] },
+  activate(facade) {
+    facade.tools.registerTool({
+      name: "good-tool",
+      label: "Good",
+      description: "registered by the healthy provider",
+      parameters: Type.Object({}),
+      async execute() {
+        await writeFile(${JSON.stringify(markerPath)}, "good-ran");
+        return { content: [{ type: "text", text: "ok" }] };
+      },
+    });
+  },
+});
+
+const badConfig = defineProvider({
+  manifest: {
+    id: "bad-config",
+    version: "1.0.0",
+    grants: ["tools"],
+    configSchema: Type.Object({ threshold: Type.Number() }),
+  },
+  activate(facade, config) {
+    facade.tools.registerTool({
+      name: "bad-config-tool",
+      label: "Bad",
+      description: "must never be registered because config is invalid",
+      parameters: Type.Object({}),
+      async execute() { return { content: [{ type: "text", text: "no" }] }; },
+    });
+  },
+});
+
+export default createPiHooksExtension({ providers: [good, badConfig] });
+`;
+}
+
+describe("SLICE-0009 AC2: manifest and config-schema validation isolates a provider", () => {
+  it("isolates a config-schema-invalid provider while its sibling stays healthy at the real seam", async () => {
+    const markerPath = join(await mkdtemp(join(tmpdir(), "pi-hooks-good-")), "good.txt");
+    const auditDir = await mkdtemp(join(tmpdir(), "pi-hooks-manifest-audit-"));
+    const auditPath = join(auditDir, "audit.jsonl");
+    const config = JSON.stringify({
+      schemaVersion: 2,
+      providers: [
+        { id: "good", enabled: true },
+        { id: "bad-config", enabled: true, config: { threshold: "not-a-number" } },
+      ],
+      audit: { path: auditPath },
+    });
+    await withProviderSession({ config, extensionSource: mixedValiditySource(markerPath) }, async (session) => {
+      // Sibling is unaffected: its tool registered and executes.
+      const good = session.getToolDefinition("good-tool");
+      expect(good).toBeDefined();
+      await good!.execute("call-1", {} as never, undefined, undefined, {} as never);
+      expect(await readFile(markerPath, "utf8")).toBe("good-ran");
+
+      // Invalid provider isolated: never activated, tool absent.
+      expect(session.getToolDefinition("bad-config-tool")).toBeUndefined();
+
+      const lines = (await readFile(auditPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+      const failure = lines.find((line) => line.provider === "bad-config" && line.decision === "module-failure");
+      expect(failure).toBeDefined();
+    });
+  }, 30_000);
+
+  it("degrades runtime health on an invalid manifest while configuration stays valid and normal (detached)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-hooks-manifest-status-"));
+    const configPath = join(dir, "pi-hooks.jsonc");
+    await writeFile(configPath, JSON.stringify({
+      schemaVersion: 2,
+      providers: [
+        { id: "healthy", enabled: true },
+        { id: "broken", enabled: true },
+      ],
+    }));
+    const healthy = defineProvider({
+      manifest: { id: "healthy", version: "1.0.0", grants: ["events"] },
+      activate() {},
+    });
+    // Structurally invalid manifest: a dynamically loaded provider missing its version.
+    const broken = defineProvider({
+      manifest: { id: "broken", version: "", grants: ["events"] },
+      activate() {},
+    });
+    const host = await createHookHost({ configPath, providers: [healthy, broken] });
+    const status = host.status();
+    // An isolated provider degrades runtime health only — configuration stays
+    // valid and the host stays in normal mode (never safe mode for one bad optional provider).
+    expect(status.runtime.health).toBe("degraded");
+    expect(status.configuration.health).toBe("valid");
+    expect(status.mode).toBe("normal");
+  });
 });
