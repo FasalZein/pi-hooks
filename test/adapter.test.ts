@@ -271,7 +271,10 @@ export default createPiHooksExtension({
       },
       context: {
         transform: ({ input }: { input: { messages: unknown[] } }) => ({
-          messages: [...input.messages, { role: "user", content: "appended-by-module" }],
+          messages: [
+            ...input.messages,
+            { role: "user", content: [{ type: "text", text: "appended-by-module" }], timestamp: Date.now() },
+          ],
         }),
       },
     },
@@ -376,6 +379,40 @@ describe("real Pi adapter: effect-bearing event mappings", () => {
           { type: "text", text: "patched result" },
           { type: "text", text: "second-patch saw: patched result" },
         ]);
+        // Untouched fields survive the partial patch.
+        expect((result as { details?: unknown }).details).toEqual({ exitCode: 0 });
+        expect((result as { isError?: boolean }).isError).toBe(false);
+      },
+    );
+  }, 30_000);
+
+  it("isolates SDK-valid binary and cyclic payload values without losing required handlers", async () => {
+    await withLoadedSession(
+      { config: mapperConfig, extraExtensionSource: effectMapperExtension(), skipHooksExtension: true },
+      async (session) => {
+        // Non-empty typed-array details are legal (details is unknown): the
+        // required patch handler must still run and untouched details survive.
+        const binaryDetails = { bytes: new Uint8Array([1, 2]) };
+        const patched = await session.extensionRunner!.emitToolResult({
+          type: "tool_result",
+          toolName: "custom-bin",
+          toolCallId: "binary",
+          input: { anything: true },
+          content: [{ type: "text", text: "binary original" }],
+          details: binaryDetails,
+          isError: false,
+        } as never);
+        expect(patched).toBeDefined();
+        expect(JSON.stringify((patched as { content: unknown }).content)).toContain("patched result");
+        expect((patched as { details: { bytes: Uint8Array } }).details.bytes).toEqual(new Uint8Array([1, 2]));
+
+        // Cyclic tool input must not break dispatch or mutate Pi's live input.
+        const nested: Record<string, unknown> = { value: "original" };
+        nested.self = nested;
+        const cyclic = { type: "tool_call", toolName: "bash", toolCallId: "cyclic", input: { command: "echo hi", nested } };
+        const result = await session.extensionRunner!.emitToolCall(cyclic as never);
+        expect(result).toBeUndefined();
+        expect((cyclic.input.nested as { value: string }).value).toBe("original");
       },
     );
   }, 30_000);
@@ -387,7 +424,8 @@ describe("real Pi adapter: effect-bearing event mappings", () => {
         const queued = { type: "tool_call", toolName: "bash", toolCallId: "queue", input: { command: "echo hi" } };
         await session.extensionRunner!.emitToolCall(queued as never);
 
-        const first = await session.extensionRunner!.emitContext([{ role: "user", content: "original" }] as never);
+        const original = { role: "user" as const, content: "original", timestamp: Date.now() };
+        const first = await session.extensionRunner!.emitContext([original]);
         const firstText = JSON.stringify(first);
         expect(firstText).toContain("original");
         // Module-to-module composition: the second module saw the first module's replacement.
@@ -400,8 +438,13 @@ describe("real Pi adapter: effect-bearing event mappings", () => {
           .find((message) => JSON.stringify(message.content ?? "").includes("tool-call-hint"));
         expect(drained).toMatchObject({ role: "user" });
         expect(typeof drained?.timestamp).toBe("number");
+        // Every returned message conforms to Pi's AgentMessage shape.
+        for (const message of first as Array<{ role?: string; timestamp?: unknown }>) {
+          expect(typeof message.role).toBe("string");
+          expect(typeof message.timestamp).toBe("number");
+        }
 
-        const second = await session.extensionRunner!.emitContext([{ role: "user", content: "original" }] as never);
+        const second = await session.extensionRunner!.emitContext([{ role: "user", content: "original", timestamp: Date.now() }]);
         const secondText = JSON.stringify(second);
         expect(secondText).toContain("appended-by-module");
         expect(secondText).not.toContain("tool-call-hint");
@@ -456,7 +499,7 @@ describe("real Pi adapter: module event views cannot reach live Pi state", () =>
         expect(event.input.nested.value).toBe("original");
 
         // Only the declared context effect reaches the next real context event.
-        const messages = await session.extensionRunner!.emitContext([{ role: "user", content: "original" }] as never);
+        const messages = await session.extensionRunner!.emitContext([{ role: "user", content: "original", timestamp: Date.now() }]);
         const text = JSON.stringify(messages);
         expect(text).toContain("declared-hint");
         expect(text).not.toContain("smuggled-context");

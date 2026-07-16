@@ -75,8 +75,6 @@ class Host implements HookHost {
   private readonly configFailure?: string;
   /** Queued module context effects, drained exactly once on the next real context event. */
   private readonly queuedContext: string[] = [];
-  /** Per-event frozen views handed to modules; never the live normalized event. */
-  private readonly eventViews = new WeakMap<NormalizedEvent, NormalizedEvent>();
 
   constructor(
     private readonly configPath: string,
@@ -335,7 +333,8 @@ class Host implements HookHost {
       const currentInput = typeof input === "function" ? input() : input;
       try {
         const invocation = {
-          event: this.eventView(event),
+          // A fresh isolated view per handler: unfreezable leaves stay private.
+          event: safeFrozenView(event),
           input: frozenView(currentInput),
           context,
           ...(extras?.() ?? {}),
@@ -367,16 +366,6 @@ class Host implements HookHost {
       () => undefined,
       () => ({ decision: state.decision, reason: state.reason, contextAdditions: frozenView([...contextAdditions]) }),
     );
-  }
-
-  /** Module-visible frozen event view, built once per dispatched event. */
-  private eventView(event: NormalizedEvent): NormalizedEvent {
-    let view = this.eventViews.get(event);
-    if (!view) {
-      view = safeFrozenView(event);
-      this.eventViews.set(event, view);
-    }
-    return view;
   }
 
   private async terminalAllow(
