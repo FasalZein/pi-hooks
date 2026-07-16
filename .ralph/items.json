@@ -32,7 +32,7 @@
         "Run the tests, confirm red, summarize the red output in .ralph/progress.md",
         "Implement src/policy-engine.ts as a config-driven provider on the events grant lane with a TypeBox configSchema for rules, bundle it in src/index.ts's default export (createPiHooksExtension({ providers: [policyEngineProvider] })), and run npm run verify green"
       ],
-      "passes": false,
+      "passes": true,
       "regression_notes": ""
     },
     {

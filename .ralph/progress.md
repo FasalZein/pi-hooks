@@ -27,3 +27,25 @@
 **Changed files:** `eslint.config.js` (new), `package.json`, `package-lock.json`, `src/grants.ts`, `test/host.test.ts`, `test/providers.test.ts`, `test/types.test.ts`.
 
 **Next-iteration notes:** Item 2 (rule matching + allow/deny composition) is next per plan order. Direct dispatch seam helpers live in `test/providers.test.ts` (`withProviderSession`, temp `PI_CODING_AGENT_DIR`). New test files must satisfy lint (no `Function`, no unused vars, `void` for intentional bare expressions).
+
+## Iteration 2 — Item 2: Rule matching and allow/deny composition (functional)
+
+**Decision rationale:** First unfinished item per plan prioritization (rule algebra after the lint gate).
+
+**Red evidence (direct dispatch seam):** New `test/policy-engine.test.ts` (8 tests) written first; run before implementation: 7/8 failed, every deny expectation received `undefined` from `emitToolCall` ("expected undefined to match object { block: true }") because no policy engine existed. The one pass was the trivially-negative sourceId-narrowing case. Log: vitest run, 7 failed / 1 passed.
+
+**What was done:**
+- New `src/policy-engine.ts`: `policyEngineProvider` (id `policy-engine`, events grant, TypeBox `configSchema` with `additionalProperties: false` throughout). Rules: `id`/`match`/`decision`/`scope`/`remedy` per the plan's rule contract. Matching: exact tool name or array; provenance `kind` (`builtin` = source === "builtin", `extension` = provenance present and not builtin) with optional `sourceId` exact narrowing; dot-path input matchers with `equals` (canonical-JSON deep equality via recursive key sort) and `contains` (string substring). Composition: severity lattice allow<ask<deny<hard-deny, highest severity wins, same-severity tie → lexicographically smallest rule id; winner `allow` → no opinion (undefined); any non-allow winner → guard deny with rule id + severity in the reason. Duplicate rule ids throw at activate (provider isolates/degrades per substrate semantics).
+- `src/index.ts`: bundles the provider in the default export (`createPiHooksExtension({ providers: [policyEngineProvider] })`); exports `policyEngineProvider`, `PolicyEngineConfigSchema`, and the config types.
+- Tests cover: exact-name deny with id+severity in reason, tool-name array, provenance kind (extension tool denied, builtin passes) and sourceId narrowing (mismatch → no match), input `contains` + key-order-insensitive `equals` on a dot path, deny-beats-allow with winner attribution, allow-only → no block, aa/zz tie-break, and full-outcome determinism across two sessions with the rules array reversed and every object's keys reordered (results deep-equal).
+
+**Assumptions (conservative, reversible):**
+- Non-allow winners (`ask`, `hard-deny`) currently block with their severity named in the reason — fail-closed placeholder; items 4/5 own their real semantics (confirm flow, unapprovable short-circuit) and their red tests at the scripted seam remain red.
+- `match.provenance` is `{ kind, sourceId? }`; `kind: "extension"` means observed provenance exists and is not "builtin". Untrusted/absent provenance matches neither kind.
+- Input matcher paths are dot-separated; segments containing dots are unsupported. Reason string carries id + severity only; scope/remedy surfacing is item 8.
+
+**Changed files:** `src/policy-engine.ts` (new), `src/index.ts`, `test/policy-engine.test.ts` (new).
+
+**Verification:** `npm run verify` → exit 0: tsc clean, eslint clean, vitest 86/86 (5 files, all prior 78 still green).
+
+**Next-iteration notes:** Item 3 (confirm-only interaction grant) is next per plan order. `withPolicySession`/`emitToolCall` helpers live in `test/policy-engine.test.ts`; the bundled default export is exercised via `export { default } from <src/index.ts> }` source. DispatchContext.ui extension is additive-permitted per plan.

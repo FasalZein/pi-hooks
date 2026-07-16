@@ -1,10 +1,13 @@
 import { createPiHooksExtension } from "./adapter.js";
+import { policyEngineProvider } from "./policy-engine.js";
 
 export { createPiHooksExtension } from "./adapter.js";
 export { normalizeEvent } from "./events.js";
 export { createHookHost } from "./host.js";
 export type { CreateHookHostOptions, HookHost, PiGrantBindings } from "./host.js";
 export { defineProvider, GRANT_KINDS } from "./grants.js";
+export { policyEngineProvider, PolicyEngineConfigSchema } from "./policy-engine.js";
+export type { PolicyEngineConfig, PolicyRuleConfig } from "./policy-engine.js";
 export type {
   CapabilityManifest,
   CapabilityProvider,
@@ -37,4 +40,5 @@ export type {
   ToolResultPatch,
 } from "./types.js";
 
-export default createPiHooksExtension();
+/** The bundled surface: the Policy Engine ships as a provider on the public grant lane. */
+export default createPiHooksExtension({ providers: [policyEngineProvider] });
