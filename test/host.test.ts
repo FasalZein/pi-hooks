@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -116,6 +116,81 @@ describe("Hook Host dispatch and Pi adapter", () => {
     await loader.reload();
     expect(loader.getExtensions().errors).toEqual([]);
   }, 30_000);
+
+  it("exercises bare typebox, typebox/compile, and typebox/value through Pi loader aliases with no repository fallback", async () => {
+    const installDir = await mkdtemp(join(tmpdir(), "pi-hooks-alias-"));
+    const { stdout } = await execFileAsync("npm", ["pack", "--json", "--ignore-scripts", "--pack-destination", installDir], {
+      cwd: fileURLToPath(new URL("..", import.meta.url)),
+    });
+    const [{ filename }] = JSON.parse(stdout) as Array<{ filename: string }>;
+    await execFileAsync("npm", ["install", join(installDir, filename), "--ignore-scripts", "--legacy-peer-deps", "--omit=peer", "--no-audit", "--no-fund"], {
+      cwd: installDir,
+    });
+    const packageDir = join(installDir, "node_modules", "@tothemoon", "pi-hooks");
+
+    // The trusted configuration module pins the exact Pi-managed TypeBox trio.
+    const configSource = await readFile(join(packageDir, "src", "config.ts"), "utf8");
+    expect(configSource).toContain('from "typebox";');
+    expect(configSource).toContain('from "typebox/compile";');
+    expect(configSource).toContain('from "typebox/value";');
+
+    // Remove the installed typebox copy: every typebox import must resolve
+    // through Pi 0.80.7 loader aliases; tmpdir offers no repository fallback.
+    await rm(join(installDir, "node_modules", "typebox"), { recursive: true, force: true });
+
+    const loadSession = async (config: string) => {
+      const agentDir = await mkdtemp(join(tmpdir(), "pi-hooks-alias-agent-"));
+      await writeFile(join(agentDir, "pi-hooks.jsonc"), config);
+      const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+      process.env.PI_CODING_AGENT_DIR = agentDir;
+      try {
+        const loader = new DefaultResourceLoader({
+          cwd: installDir,
+          agentDir,
+          additionalExtensionPaths: [join(packageDir, "src", "index.ts")],
+          noSkills: true,
+          noPromptTemplates: true,
+          noThemes: true,
+          noContextFiles: true,
+        });
+        await loader.reload();
+        expect(loader.getExtensions().errors).toEqual([]);
+        const { session } = await createAgentSession({ resourceLoader: loader, sessionManager: SessionManager.inMemory() });
+        return session;
+      } finally {
+        if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+        else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      }
+    };
+
+    // Valid config: the compiled checker (typebox/compile) accepts through the alias path.
+    const healthy = await loadSession(JSON.stringify({ schemaVersion: 1, modules: [] }));
+    try {
+      const allowed = await healthy.extensionRunner!.emitToolCall({
+        type: "tool_call",
+        toolName: "bash",
+        toolCallId: "alias-ok",
+        input: { command: "echo hi" },
+      } as never);
+      expect(allowed).toBeUndefined();
+    } finally {
+      healthy.dispose();
+    }
+
+    // Invalid config: schema error enumeration (typebox/value) drives Read-Only Safe Mode.
+    const safeMode = await loadSession(JSON.stringify({ schemaVersion: 2, modules: [] }));
+    try {
+      const denied = await safeMode.extensionRunner!.emitToolCall({
+        type: "tool_call",
+        toolName: "write",
+        toolCallId: "alias-bad",
+        input: { path: "x", content: "y" },
+      } as never);
+      expect(denied).toMatchObject({ block: true, reason: expect.stringContaining("Read-Only Safe Mode") });
+    } finally {
+      safeMode.dispose();
+    }
+  }, 60_000);
 
   it("traverses the complete guard → transform → internal-final → context → observe path", async () => {
     const seen: string[] = [];
