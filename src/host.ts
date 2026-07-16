@@ -47,8 +47,8 @@ export async function createHookHost(options: CreateHookHostOptions = {}): Promi
 }
 
 class Host implements HookHost {
-  private degraded = false;
-  private lastFailure?: string;
+  private runtimeFailure?: string;
+  private readonly configFailure?: string;
 
   constructor(
     private readonly configPath: string,
@@ -59,7 +59,7 @@ class Host implements HookHost {
     private readonly audit: AuditLog,
     failure: string | undefined,
   ) {
-    this.lastFailure = failure;
+    this.configFailure = failure;
   }
 
   async recordSafeMode(reason: string): Promise<void> {
@@ -74,14 +74,19 @@ class Host implements HookHost {
   }
 
   status(): HostStatus {
-    const valid = !this.lastFailure || this.config !== undefined && this.modules.length >= 0 && !this.isSafeMode();
     const configured = this.config?.modules ?? [];
     const enabledIds = new Set(this.modules.map((module) => module.id));
     const audit = this.audit.status();
     return {
       configSource: this.configPath,
-      configHealth: valid ? "valid" : "invalid",
-      ...(this.lastFailure ? { lastFailure: this.lastFailure } : {}),
+      configuration: {
+        health: this.config !== undefined && this.configFailure === undefined ? "valid" : "invalid",
+        ...(this.configFailure ? { lastFailure: this.configFailure } : {}),
+      },
+      runtime: {
+        health: this.runtimeFailure ? "degraded" : "healthy",
+        ...(this.runtimeFailure ? { lastFailure: this.runtimeFailure } : {}),
+      },
       modules: configured.map((entry) => ({
         id: entry.id,
         enabled: enabledIds.has(entry.id),
@@ -89,7 +94,6 @@ class Host implements HookHost {
       })),
       phaseOrder: this.phaseOrder,
       mode: this.isSafeMode() ? "read-only-safe" : "normal",
-      health: this.degraded || this.isSafeMode() || audit.health === "degraded" ? "degraded" : "healthy",
       audit,
       finalInterceptor: { available: false, boundary: FINAL_BOUNDARY },
     };
@@ -173,7 +177,7 @@ class Host implements HookHost {
   }
 
   private isSafeMode(): boolean {
-    return this.config === undefined || this.lastFailure !== undefined && this.modules.length === 0;
+    return this.config === undefined || this.configFailure !== undefined && this.modules.length === 0;
   }
 
   private async safeModeDispatch(event: NormalizedEvent, context: DispatchContext): Promise<DispatchResult> {
@@ -203,8 +207,7 @@ class Host implements HookHost {
     input: Record<string, unknown>,
   ): Promise<{ decision: "allow" | "deny"; reason?: string }> {
     const failure = `${module.id} ${phase} failed: ${message(error)}`;
-    this.degraded = true;
-    this.lastFailure = failure;
+    this.runtimeFailure = failure;
     await this.writeDecision(module.id, event, context, phase, "module-failure", failure, input);
     if (phase !== "observe" && this.requiredById.get(module.id) !== false) return { decision: "deny", reason: failure };
     return { decision, reason };

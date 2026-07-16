@@ -81,12 +81,20 @@ export interface DispatchResult {
 
 export interface HostStatus {
   configSource: string;
-  configHealth: "valid" | "invalid";
-  lastFailure?: string;
+  /** Configuration validity lane: preparation and schema failures only. */
+  configuration: {
+    health: "valid" | "invalid";
+    lastFailure?: string;
+  };
+  /** Runtime module health lane: module execution failures only. */
+  runtime: {
+    health: "healthy" | "degraded";
+    lastFailure?: string;
+  };
   modules: Array<{ id: string; enabled: boolean; required: boolean }>;
   phaseOrder: Record<HookPhase, string[]>;
   mode: "normal" | "read-only-safe";
-  health: "healthy" | "degraded";
+  /** Audit persistence health lane: append/serialization failures only. */
   audit: {
     health: "healthy" | "degraded";
     lastFailure?: string;

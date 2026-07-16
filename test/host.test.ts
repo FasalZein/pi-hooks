@@ -221,7 +221,7 @@ describe("ordering and effective policy validation", () => {
     });
     const status = degradedHost.status();
     expect(status.mode).toBe("normal");
-    expect(status.configHealth).toBe("valid");
+    expect(status.configuration.health).toBe("valid");
     expect(status.modules).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: "present", enabled: true, required: true }),
       expect.objectContaining({ id: "ghost", enabled: false, required: false }),
@@ -239,8 +239,7 @@ describe("ordering and effective policy validation", () => {
     const safeHost = await createHookHost({ configPath: requiredMissing.configPath, modules: [] });
     expect(safeHost.status()).toMatchObject({
       mode: "read-only-safe",
-      configHealth: "invalid",
-      lastFailure: expect.stringContaining("ghost"),
+      configuration: { health: "invalid", lastFailure: expect.stringContaining("ghost") },
     });
   });
 
@@ -255,8 +254,7 @@ describe("ordering and effective policy validation", () => {
     });
     expect(host.status()).toMatchObject({
       mode: "read-only-safe",
-      configHealth: "invalid",
-      lastFailure: expect.stringContaining("dup"),
+      configuration: { health: "invalid", lastFailure: expect.stringContaining("dup") },
     });
   });
 
@@ -276,14 +274,14 @@ describe("ordering and effective policy validation", () => {
         { id: "b", after: ["a"], guard: () => undefined },
       ],
     });
-    expect(cycleHost.status()).toMatchObject({ mode: "read-only-safe", configHealth: "invalid" });
+    expect(cycleHost.status()).toMatchObject({ mode: "read-only-safe", configuration: { health: "invalid" } });
 
     const missing = await fixture(validConfig(["a"]));
     const missingHost = await createHookHost({
       configPath: missing.configPath,
       modules: [{ id: "a", requires: ["required-module"], guard: () => undefined }],
     });
-    expect(missingHost.status().lastFailure).toContain("required-module");
+    expect(missingHost.status().configuration.lastFailure).toContain("required-module");
   });
 });
 
@@ -304,7 +302,7 @@ describe("configuration, safe mode, audit, and status", () => {
     const write = await host.dispatch(normalizeEvent("tool_call", { toolName: "write", toolCallId: "w", input: { path: "x", content: "secret" } }), ctx as never);
     expect(read).toMatchObject({ decision: "deny", reason: expect.stringContaining("Read-Only Safe Mode") });
     expect(write).toMatchObject({ decision: "deny", reason: expect.stringContaining("Read-Only Safe Mode") });
-    expect(host.status()).toMatchObject({ mode: "read-only-safe", configHealth: "invalid" });
+    expect(host.status()).toMatchObject({ mode: "read-only-safe", configuration: { health: "invalid" } });
   });
 
   it("audits safe-mode entry and module failures", async () => {
@@ -336,7 +334,7 @@ describe("configuration, safe mode, audit, and status", () => {
     const result = await host.dispatch(normalizeEvent("tool_call", { toolName: "read", toolCallId: "f", input: { path: "x" } }), ctx as never);
     expect(result.decision).toBe("allow");
     expect(await readFile(failed.auditPath, "utf8")).toContain('"decision":"module-failure"');
-    expect(host.status()).toMatchObject({ configHealth: "valid", health: "degraded" });
+    expect(host.status()).toMatchObject({ configuration: { health: "valid" }, runtime: { health: "degraded" } });
   });
 
   it("minimizes and bounds audit records containing embedded secrets", async () => {
@@ -435,7 +433,7 @@ describe("configuration, safe mode, audit, and status", () => {
     await pi.commands.get("hooks")?.handler("status", { ...ctx, ui: { notify: (text: string) => notices.push(text) } });
     expect(JSON.parse(notices[0])).toMatchObject({
       mode: "read-only-safe",
-      health: "degraded",
+      runtime: { health: "healthy" },
       audit: { health: "degraded", lastFailure: expect.any(String) },
     });
   });
@@ -466,7 +464,37 @@ describe("configuration, safe mode, audit, and status", () => {
       reason: "blocked",
       input: { command: "echo safe" },
     });
-    expect(host.status()).toMatchObject({ health: "degraded", audit: { health: "degraded" } });
+    expect(host.status()).toMatchObject({ runtime: { health: "healthy" }, audit: { health: "degraded" } });
+  });
+
+  it("reports configuration, runtime module, and audit persistence health as three independent lanes", async () => {
+    const { configPath, auditPath } = await fixture(validConfig());
+    await mkdir(auditPath);
+    await writeFile(configPath, JSON.stringify({
+      schemaVersion: 1,
+      modules: [{ id: "flaky", required: false }],
+      audit: { path: auditPath },
+    }));
+    const host = await createHookHost({
+      configPath,
+      modules: [{ id: "flaky", guard: () => { throw new Error("flaky boom"); } }],
+    });
+    const result = await host.dispatch(normalizeEvent("tool_call", {
+      toolName: "bash",
+      toolCallId: "lanes",
+      input: { command: "echo hi" },
+    }), ctx as never);
+    expect(result.decision).toBe("allow");
+
+    const status = host.status() as unknown as {
+      configuration?: { health: string; lastFailure?: string };
+      runtime?: { health: string; lastFailure?: string };
+      audit: { health: string; lastFailure?: string };
+    };
+    expect(status.configuration).toMatchObject({ health: "valid" });
+    expect(status.configuration?.lastFailure).toBeUndefined();
+    expect(status.runtime).toMatchObject({ health: "degraded", lastFailure: expect.stringContaining("flaky") });
+    expect(status.audit).toMatchObject({ health: "degraded", lastFailure: expect.any(String) });
   });
 
   it("reports config, modules, order, mode, health, and unavailable process-wide final interception", async () => {
@@ -478,7 +506,7 @@ describe("configuration, safe mode, audit, and status", () => {
     const status = JSON.parse(notices[0]);
     expect(status).toMatchObject({
       configSource: configPath,
-      configHealth: "valid",
+      configuration: { health: "valid" },
       modules: [{ id: "one", enabled: true }],
       mode: "normal",
       finalInterceptor: { available: false },
