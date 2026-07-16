@@ -1,5 +1,5 @@
 import { Type, type Static } from "typebox";
-import { defineProvider } from "./grants.js";
+import { defineProvider, type InteractionGrant } from "./grants.js";
 import type { GuardResult, HookInvocation } from "./types.js";
 
 /**
@@ -65,7 +65,7 @@ export const policyEngineProvider = defineProvider({
   manifest: {
     id: "policy-engine",
     version: "1.0.0",
-    grants: ["events"],
+    grants: ["events", "interaction"],
     configSchema: PolicyEngineConfigSchema,
   },
   activate(facade, config) {
@@ -73,7 +73,7 @@ export const policyEngineProvider = defineProvider({
     facade.events.registerModule({
       id: "policy-engine",
       tool_call: {
-        guard: (invocation) => decide(rules, invocation),
+        guard: (invocation) => decide(rules, invocation, facade.interaction),
       },
     });
   },
@@ -89,14 +89,35 @@ function prepareRules(config: PolicyEngineConfig): readonly PolicyRuleConfig[] {
   return config.rules;
 }
 
-function decide(rules: readonly PolicyRuleConfig[], invocation: HookInvocation): GuardResult | undefined {
+async function decide(
+  rules: readonly PolicyRuleConfig[],
+  invocation: HookInvocation,
+  interaction: InteractionGrant,
+): Promise<GuardResult | undefined> {
   const winner = composeDecision(rules, invocation);
   if (!winner || winner.decision === "allow") return undefined;
-  // Fail-closed: any non-allow severity blocks at this observed boundary. The
-  // ask confirm flow and the hard-deny short-circuit refine this in later work.
+  const toolName = invocation.event.toolName ?? "(unnamed)";
+  if (winner.decision === "ask") {
+    // Two-phase approval, phase one: ask exactly once for the exact elevated
+    // action. Unattended sessions fail closed — no UI means denied immediately.
+    const outcome = await interaction.confirm(
+      {
+        title: "Policy Engine approval",
+        message: `Rule "${winner.id}" requires approval to run tool "${toolName}"`,
+      },
+      { noUiOutcome: "denied" },
+    );
+    if (outcome === "approved") return undefined;
+    return {
+      decision: "deny",
+      reason: `Policy Engine rule "${winner.id}" (severity: ask) denies tool "${toolName}": approval was not granted`,
+    };
+  }
+  // Fail-closed: any remaining non-allow severity blocks at this observed
+  // boundary. The hard-deny short-circuit refines this in later work.
   return {
     decision: "deny",
-    reason: `Policy Engine rule "${winner.id}" (severity: ${winner.decision}) denies tool "${invocation.event.toolName ?? "(unnamed)"}"`,
+    reason: `Policy Engine rule "${winner.id}" (severity: ${winner.decision}) denies tool "${toolName}"`,
   };
 }
 

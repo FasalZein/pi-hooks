@@ -56,7 +56,7 @@
         "Run red, record evidence in .ralph/progress.md",
         "Implement ask handling in src/policy-engine.ts using the item-3 interaction grant (confirm at tool_call.guard with noUiOutcome=deny); run npm run verify green"
       ],
-      "passes": false,
+      "passes": true,
       "regression_notes": ""
     },
     {

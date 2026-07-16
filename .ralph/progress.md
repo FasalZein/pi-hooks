@@ -74,3 +74,24 @@
 **Verification:** `npm run verify` → exit 0: tsc clean, eslint clean, vitest 90/90 (6 files; all prior 86 still green).
 
 **Next-iteration notes:** Item 4 (ask severity + fail-closed) is next. Use `facade.interaction.confirm(…, { noUiOutcome: "denied" })` from the policy engine's guard — the policy engine manifest must add the `interaction` grant. The scripted agent turn seam (deterministic `session.agent.streamFn` + marker tool) has no helper yet; build it in item 4's test file. `confirmingUiContext` stub lives in `test/interaction.test.ts`.
+
+## Iteration 4 — Item 4: Ask severity with fail-closed unattended safety (functional)
+
+**Decision rationale:** First unfinished item per plan prioritization; it is the first consumer of item 3's confirm-only interaction grant.
+
+**Red evidence:** Added four item-specific tests and ran `npx vitest run test/policy-engine.test.ts --reporter=json --outputFile=/tmp/vitest-item4.json` before implementation → exit 1, 10/12 passed and 2/12 failed. Both attended scripted-turn cases expected one confirmation call but observed zero (`expected [] to have a length of 1 but got +0`), proving the placeholder ask path blocked without consulting the interaction broker. The direct no-UI and unattended scripted-turn cases already passed against the prior fail-closed placeholder.
+
+**What was done:**
+- `src/policy-engine.ts`: policy-engine now declares the `interaction` grant. The async `tool_call.guard` composes the winning rule as before; an `ask` winner calls `facade.interaction.confirm` exactly once with the rule id and exact tool name, passing `{ noUiOutcome: "denied" }`. Approval allows the observed tool call; rejection or absent UI returns a deny reason containing the winning rule id and `ask` severity. Other non-allow severities remain fail-closed.
+- `test/policy-engine.test.ts`: added direct-dispatch coverage proving ask outranks allow and blocks with rule id + severity when no UI is bound. Added the required scripted agent-turn seam: deterministic `session.agent.streamFn`, extension-registered marker tool, model-visible `toolResult` assertions, and marker-file execution count. It proves unattended ask-deny never executes; attended confirmation fires once; accept executes exactly once; reject never executes.
+
+**Assumptions (conservative, reversible):**
+- As in item 3, hasUI=false is represented by not binding a uiContext because Pi computes `hasUI` from whether a non-no-op context is bound.
+- The exact elevated action is the observed public `tool_call` tool name. The confirmation message includes both tool name and winning rule id; no claim is made beyond that boundary.
+- Direct dispatch proves decision shape and reason only; execution claims use the scripted agent turn plus marker side effect/transcript, per the plan's seam contract.
+
+**Changed files:** `src/policy-engine.ts`, `test/policy-engine.test.ts`.
+
+**Verification:** Focused post-implementation run `npx vitest run test/policy-engine.test.ts --reporter=json --outputFile=/tmp/vitest-item4-green.json` → exit 0, 12/12 passed. `npm run verify` → exit 0: tsc clean, eslint clean, vitest 94/94 (6 files, all prior 90 still green).
+
+**Next-iteration notes:** Follow `.ralph/plan.md` prioritization and `.ralph/items.json`; the ask scripted-turn helper now lives in `test/policy-engine.test.ts`.

@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -211,4 +211,194 @@ describe("SLICE-0011 item 2: rule matching and allow/deny composition", () => {
     expect(resultA?.reason).toContain("aa-deny");
     expect(resultB).toEqual(resultA);
   }, 60_000);
+});
+
+/** Policy Engine plus a tools-grant provider whose marker tool appends one
+ * byte per execution — the file's length counts executions exactly. */
+function markerPolicySource(markerPath: string): string {
+  return `
+import { Type } from "typebox";
+import { appendFile } from "node:fs/promises";
+import { createPiHooksExtension, defineProvider, policyEngineProvider } from ${JSON.stringify(hooksIndexPath)};
+
+const markerProvider = defineProvider({
+  manifest: { id: "marker-tools", version: "1.0.0", grants: ["tools"] },
+  activate(facade) {
+    facade.tools.registerTool({
+      name: "marker",
+      label: "Marker",
+      description: "appends to a marker file to prove execution",
+      parameters: Type.Object({ note: Type.String() }),
+      async execute() {
+        await appendFile(${JSON.stringify(markerPath)}, "x");
+        return { content: [{ type: "text", text: "marked" }] };
+      },
+    });
+  },
+});
+
+export default createPiHooksExtension({ providers: [policyEngineProvider, markerProvider] });
+`;
+}
+
+/** Full ExtensionUIContext stub whose confirm records the request and answers. */
+function confirmingUiContext(calls: Array<[string, string]>, answer: boolean): unknown {
+  return {
+    select: async () => undefined,
+    confirm: async (title: string, message: string) => {
+      calls.push([title, message]);
+      return answer;
+    },
+    input: async () => undefined,
+    notify: () => undefined,
+    onTerminalInput: () => () => undefined,
+    setStatus: () => undefined,
+    setWorkingMessage: () => undefined,
+    setWorkingVisible: () => undefined,
+    setWorkingIndicator: () => undefined,
+    setHiddenThinkingLabel: () => undefined,
+    setWidget: () => undefined,
+    setFooter: () => undefined,
+    setHeader: () => undefined,
+    setTitle: () => undefined,
+    custom: () => undefined,
+  };
+}
+
+const scriptedModel = {
+  id: "scripted",
+  name: "Scripted",
+  api: "anthropic-messages",
+  provider: "anthropic",
+  baseUrl: "https://scripted.invalid",
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 100_000,
+  maxTokens: 4096,
+};
+
+function scriptedAssistant(content: readonly unknown[], stopReason: "toolUse" | "stop"): Record<string, unknown> {
+  return {
+    role: "assistant",
+    content,
+    api: scriptedModel.api,
+    provider: scriptedModel.provider,
+    model: scriptedModel.id,
+    usage: {
+      input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason,
+    timestamp: Date.now(),
+  };
+}
+
+/** Scripted agent turn seam (see .ralph/plan.md "Test seams"): a deterministic
+ * session.agent.streamFn whose first turn requests one marker tool call and
+ * whose second turn stops. The marker side effect proves "executed"; its
+ * absence proves "never executed"; the toolResult message in the transcript is
+ * the model-visible output. */
+async function runScriptedToolTurn(
+  session: AgentSession,
+  toolCall: { name: string; arguments: Record<string, unknown> },
+): Promise<{ isError?: boolean; text: string }> {
+  const toolCallId = "scripted-call-1";
+  let turn = 0;
+  session.agent.state.model = scriptedModel as never;
+  session.agent.streamFn = ((): unknown => {
+    turn += 1;
+    const message = turn === 1
+      ? scriptedAssistant([{ type: "toolCall", id: toolCallId, name: toolCall.name, arguments: toolCall.arguments }], "toolUse")
+      : scriptedAssistant([{ type: "text", text: "done" }], "stop");
+    const events = [
+      { type: "start", partial: message },
+      { type: "done", reason: message.stopReason, message },
+    ];
+    return {
+      async *[Symbol.asyncIterator]() {
+        for (const event of events) yield event;
+      },
+      result: async () => message,
+    };
+  }) as never;
+  await session.agent.prompt("run the marker tool");
+  const toolResult = session.agent.state.messages.find(
+    (message) => (message as { role?: string; toolCallId?: string }).role === "toolResult"
+      && (message as { toolCallId?: string }).toolCallId === toolCallId,
+  ) as { isError?: boolean; content?: Array<{ type: string; text?: string }> } | undefined;
+  expect(toolResult).toBeDefined();
+  const text = (toolResult?.content ?? [])
+    .filter((part) => part.type === "text")
+    .map((part) => part.text ?? "")
+    .join("\n");
+  return { isError: toolResult?.isError, text };
+}
+
+async function markerExecutions(markerPath: string): Promise<number> {
+  try {
+    return (await readFile(markerPath, "utf8")).length;
+  } catch {
+    return 0;
+  }
+}
+
+describe("SLICE-0011 item 4: ask severity with fail-closed unattended safety", () => {
+  const askMarkerRules = [
+    { id: "allow-marker", match: { tool: "marker" }, decision: "allow", scope: "marker tool", remedy: "n/a" },
+    { id: "ask-marker", match: { tool: "marker" }, decision: "ask", scope: "marker tool", remedy: "approve the confirmation prompt" },
+  ];
+
+  function askMarkerConfig(): string {
+    return policyConfig(askMarkerRules, [{ id: "marker-tools", enabled: true }]);
+  }
+
+  it("direct dispatch: ask + allow compose to ask and block fail-closed when no UI is attached", async () => {
+    const markerPath = join(await mkdtemp(join(tmpdir(), "pi-hooks-ask-")), "marker.txt");
+    await withPolicySession({ config: askMarkerConfig(), extensionSource: markerPolicySource(markerPath) }, async (session) => {
+      // No uiContext bound: the runner reports hasUI=false for this session.
+      const result = await emitToolCall(session, "marker", { note: "hi" });
+      expect(result).toMatchObject({ block: true });
+      expect(result?.reason).toContain("ask-marker");
+      expect(result?.reason).toContain("ask");
+      expect(result?.reason).not.toContain("allow-marker");
+    });
+  }, 30_000);
+
+  it("scripted turn: under unattended ask-deny the marker tool never executes and the result is an error", async () => {
+    const markerPath = join(await mkdtemp(join(tmpdir(), "pi-hooks-ask-")), "marker.txt");
+    await withPolicySession({ config: askMarkerConfig(), extensionSource: markerPolicySource(markerPath) }, async (session) => {
+      const result = await runScriptedToolTurn(session, { name: "marker", arguments: { note: "hi" } });
+      expect(result.isError).toBe(true);
+      expect(result.text).toContain("ask-marker");
+      expect(await markerExecutions(markerPath)).toBe(0);
+    });
+  }, 30_000);
+
+  it("scripted turn: with UI the prompt fires exactly once for the action and the tool executes once on accept", async () => {
+    const markerPath = join(await mkdtemp(join(tmpdir(), "pi-hooks-ask-")), "marker.txt");
+    const calls: Array<[string, string]> = [];
+    await withPolicySession({ config: askMarkerConfig(), extensionSource: markerPolicySource(markerPath) }, async (session) => {
+      await session.bindExtensions({ uiContext: confirmingUiContext(calls, true) as never });
+      const result = await runScriptedToolTurn(session, { name: "marker", arguments: { note: "hi" } });
+      expect(calls).toHaveLength(1);
+      // The prompt names the exact elevated action.
+      expect(calls[0].join("\n")).toContain("marker");
+      expect(result.isError ?? false).toBe(false);
+      expect(await markerExecutions(markerPath)).toBe(1);
+    });
+  }, 30_000);
+
+  it("scripted turn: with UI the tool is blocked on reject and never executes", async () => {
+    const markerPath = join(await mkdtemp(join(tmpdir(), "pi-hooks-ask-")), "marker.txt");
+    const calls: Array<[string, string]> = [];
+    await withPolicySession({ config: askMarkerConfig(), extensionSource: markerPolicySource(markerPath) }, async (session) => {
+      await session.bindExtensions({ uiContext: confirmingUiContext(calls, false) as never });
+      const result = await runScriptedToolTurn(session, { name: "marker", arguments: { note: "hi" } });
+      expect(calls).toHaveLength(1);
+      expect(result.isError).toBe(true);
+      expect(result.text).toContain("ask-marker");
+      expect(await markerExecutions(markerPath)).toBe(0);
+    });
+  }, 30_000);
 });
