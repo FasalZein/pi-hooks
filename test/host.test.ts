@@ -28,14 +28,16 @@ async function fixture(config: string) {
   return { configPath, auditPath };
 }
 
+type TestHandler = (...args: unknown[]) => unknown;
+
 function fakePi() {
-  const handlers = new Map<string, Function>();
-  const commands = new Map<string, { handler: Function }>();
+  const handlers = new Map<string, TestHandler>();
+  const commands = new Map<string, { handler: TestHandler }>();
   const registrations: string[] = [];
   return {
     api: {
-      on(name: string, handler: Function) { handlers.set(name, handler); },
-      registerCommand(name: string, command: { handler: Function }) {
+      on(name: string, handler: TestHandler) { handlers.set(name, handler); },
+      registerCommand(name: string, command: { handler: TestHandler }) {
         registrations.push(`command:${name}`);
         commands.set(name, command);
       },

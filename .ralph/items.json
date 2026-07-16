@@ -20,7 +20,7 @@
         "Run npm run lint, fix every finding in repo code without weakening any runtime behavior or test assertion (rule-level disables allowed only with a justifying comment)",
         "Run npm run verify and confirm typecheck, lint, and the full vitest suite all pass"
       ],
-      "passes": false,
+      "passes": true,
       "regression_notes": ""
     },
     {

@@ -111,14 +111,14 @@ function grantFacadeAssertions(): void {
   const toolsFacade = {} as GrantFacade<"tools">;
   toolsFacade.tools.registerTool({} as never); // declared grant is usable
   // @ts-expect-error the events grant is undeclared for a tools-only facade
-  toolsFacade.events;
+  void toolsFacade.events;
 
   const eventsFacade = {} as GrantFacade<"events">;
   eventsFacade.events.registerModule({ id: "m" });
   // @ts-expect-error raw Pi ExtensionAPI (pi.on) is never handed to a provider
-  eventsFacade.on;
+  void eventsFacade.on;
   // @ts-expect-error model-provider registration is not a grant and is unexpressible
-  eventsFacade.registerProvider;
+  void eventsFacade.registerProvider;
 
   // @ts-expect-error "registerProvider" is not a GrantKind, so no such facade exists
   const _noProviderGrant = {} as GrantFacade<"registerProvider">;
@@ -131,7 +131,7 @@ function grantFacadeAssertions(): void {
     activate(facade) {
       facade.events.registerModule({ id: "m" });
       // @ts-expect-error events-only provider cannot use the tools grant
-      facade.tools;
+      void facade.tools;
     },
   };
   void eventsOnlyProvider;

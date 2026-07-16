@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAgentSession, DefaultResourceLoader, SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import { Type } from "typebox";
 import { createHookHost, defineProvider, normalizeEvent } from "../src/index.js";
 import { loadGlobalConfig } from "../src/config.js";
 
@@ -72,7 +71,7 @@ export default createPiHooksExtension({ providers: [greeter] });
 }
 
 /** A provider without the tools grant that casts around the type and calls registerTool anyway. */
-function ungrantedToolSource(auditPath: string): string {
+function ungrantedToolSource(): string {
   return `
 import { Type } from "typebox";
 import { createPiHooksExtension, defineProvider } from ${JSON.stringify(hooksIndexPath)};
@@ -120,7 +119,7 @@ describe("SLICE-0009 AC1: tools grant registration and refusal at the real seam"
       providers: [{ id: "sneaky", enabled: true }],
       audit: { path: auditPath, includeAllows: false },
     });
-    await withProviderSession({ config, extensionSource: ungrantedToolSource(auditPath) }, async (session) => {
+    await withProviderSession({ config, extensionSource: ungrantedToolSource() }, async (session) => {
       // The tool never reaches Pi's registry.
       expect(session.getAllTools().find((tool) => tool.name === "sneaky-tool")).toBeUndefined();
       expect(session.getToolDefinition("sneaky-tool")).toBeUndefined();

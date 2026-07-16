@@ -119,7 +119,7 @@ function refusalGrant(kind: GrantKind, refuse: RefuseFn): unknown {
     {},
     {
       get(_target, prop) {
-        return (..._args: unknown[]): never => {
+        return (): never => {
           refuse(kind, String(prop));
           throw new Error(`Capability refused: provider did not declare the "${kind}" grant`);
         };

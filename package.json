@@ -4,15 +4,27 @@
   "description": "Extension-only deterministic Hook Host for Pi 0.80.7.",
   "type": "module",
   "license": "MIT",
-  "files": ["src", "schema", "README.md"],
-  "keywords": ["pi-package", "pi", "pi-extension", "hooks"],
+  "files": [
+    "src",
+    "schema",
+    "README.md"
+  ],
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-extension",
+    "hooks"
+  ],
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "verify": "npm run typecheck && npm test"
+    "lint": "eslint src test",
+    "verify": "npm run typecheck && npm run lint && npm test"
   },
   "pi": {
-    "extensions": ["./src/index.ts"]
+    "extensions": [
+      "./src/index.ts"
+    ]
   },
   "dependencies": {
     "jsonc-parser": "3.3.1",
@@ -24,7 +36,9 @@
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.80.7",
     "@types/node": "24.12.0",
+    "eslint": "10.7.0",
     "typescript": "5.9.3",
+    "typescript-eslint": "8.64.0",
     "vitest": "4.0.18"
   }
 }
