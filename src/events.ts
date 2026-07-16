@@ -1,3 +1,4 @@
+import { cloneDeep } from "./isolate.js";
 import type { NormalizedEvent } from "./types.js";
 
 const ALIASES: Record<string, NormalizedEvent["type"]> = {
@@ -31,7 +32,7 @@ export function normalizeEvent(sourceType: string, payload: Record<string, unkno
 
   const rawInput = payload.input ?? payload.toolInput ?? {};
   const input = rawInput && typeof rawInput === "object" && !Array.isArray(rawInput)
-    ? { ...(rawInput as Record<string, unknown>) }
+    ? cloneDeep(rawInput as Record<string, unknown>)
     : {};
 
   return {

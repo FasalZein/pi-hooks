@@ -10,12 +10,12 @@ const hooksExtensionPath = fileURLToPath(new URL("../src/index.ts", import.meta.
 const invalidConfig = JSON.stringify({ schemaVersion: 2, modules: [] });
 
 async function withLoadedSession<T>(
-  options: { config: string; extraExtensionSource?: string },
+  options: { config: string; extraExtensionSource?: string; skipHooksExtension?: boolean },
   run: (session: AgentSession) => Promise<T>,
 ): Promise<T> {
   const agentDir = await mkdtemp(join(tmpdir(), "pi-hooks-adapter-"));
   await writeFile(join(agentDir, "pi-hooks.jsonc"), options.config);
-  const additionalExtensionPaths = [hooksExtensionPath];
+  const additionalExtensionPaths = options.skipHooksExtension ? [] : [hooksExtensionPath];
   if (options.extraExtensionSource) {
     const extraPath = join(agentDir, "extra-extension.ts");
     await writeFile(extraPath, options.extraExtensionSource);
@@ -65,6 +65,45 @@ export default function overrideRead(pi: any) {
 }
 `;
 }
+
+function nestedMutatorExtension(): string {
+  return `
+import { createPiHooksExtension } from ${JSON.stringify(hooksExtensionPath)};
+
+export default createPiHooksExtension({
+  modules: [{
+    id: "nested-mutator",
+    guard: ({ input }: { input: Record<string, unknown> }) => {
+      try {
+        (input.nested as { value: string }).value = "mutated-by-guard";
+      } catch {}
+    },
+  }],
+});
+`;
+}
+
+describe("real Pi adapter: deep payload isolation", () => {
+  it("keeps nested mutation without an explicit transform away from Pi's live input", async () => {
+    const validConfig = JSON.stringify({ schemaVersion: 1, modules: [{ id: "nested-mutator", enabled: true }] });
+    await withLoadedSession(
+      { config: validConfig, extraExtensionSource: nestedMutatorExtension(), skipHooksExtension: true },
+      async (session) => {
+        const event = {
+          type: "tool_call",
+          toolName: "bash",
+          toolCallId: "isolation",
+          input: { command: "echo hi", nested: { value: "original" } },
+        };
+
+        const result = await session.extensionRunner!.emitToolCall(event as never);
+
+        expect(result).toBeUndefined();
+        expect(event.input.nested.value).toBe("original");
+      },
+    );
+  }, 30_000);
+});
 
 describe("real Pi adapter: Read-Only Safe Mode provenance", () => {
   it("denies a same-name extension read override in safe mode and never executes it", async () => {

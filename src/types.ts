@@ -74,6 +74,8 @@ export interface AuditRecord {
 export interface DispatchResult {
   decision: HookDecision;
   reason?: string;
+  /** True only when a module transform produced an explicit replacement input. */
+  mutated: boolean;
   input: Record<string, unknown>;
   contextAdditions: string[];
   auditRecords: AuditRecord[];

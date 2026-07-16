@@ -11,7 +11,7 @@ export function createPiHooksExtension(options: CreateHookHostOptions = {}) {
       const normalized = normalizeEvent("tool_call", record(event));
       normalized.provenance = resolveProvenance(pi, normalized.toolName);
       const result = await host.dispatch(normalized, ctx as DispatchContext);
-      replaceInput(event.input as Record<string, unknown>, result.input);
+      if (result.mutated) replaceInput(event.input as Record<string, unknown>, result.input);
       if (result.decision === "deny") return { block: true, reason: result.reason };
     });
 

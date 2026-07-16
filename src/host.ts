@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { AuditLog } from "./audit.js";
+import { cloneDeep, frozenView } from "./isolate.js";
 import { loadGlobalConfig, type GlobalConfig } from "./config.js";
 import { resolveOrder } from "./order.js";
 import type { AuditRecord, DispatchContext, DispatchResult, HookModule, HookPhase, HostStatus, NormalizedEvent } from "./types.js";
@@ -101,16 +102,17 @@ class Host implements HookHost {
   async dispatch(event: NormalizedEvent, context: DispatchContext): Promise<DispatchResult> {
     if (this.isSafeMode()) return this.safeModeDispatch(event, context);
 
-    let input = { ...event.input };
+    let input = cloneDeep(event.input);
     let decision: "allow" | "deny" = "allow";
     let reason: string | undefined;
+    let mutated = false;
     const contextAdditions: string[] = [];
     const start = this.audit.records.length;
 
     for (const module of this.modules) {
       if (!module.guard || decision === "deny") continue;
       try {
-        const result = await module.guard({ event, input, context });
+        const result = await module.guard({ event, input: frozenView(input), context });
         if (result?.decision === "deny") {
           decision = "deny";
           reason = result.reason ?? `Denied by ${module.id}`;
@@ -124,9 +126,10 @@ class Host implements HookHost {
     for (const module of this.modules) {
       if (!module.transform || decision === "deny") continue;
       try {
-        const result = await module.transform({ event, input, context });
+        const result = await module.transform({ event, input: frozenView(input), context });
         if (result) {
-          input = { ...result.input };
+          input = cloneDeep(result.input);
+          mutated = true;
           await this.writeDecision(module.id, event, context, "transform", "mutate", undefined, input);
         }
       } catch (error) {
@@ -137,7 +140,7 @@ class Host implements HookHost {
     for (const module of this.modules) {
       if (!module.internalFinal || decision === "deny") continue;
       try {
-        const result = await module.internalFinal({ event, input, context });
+        const result = await module.internalFinal({ event, input: frozenView(input), context });
         if (result?.decision === "deny") {
           decision = "deny";
           reason = result.reason ?? `Denied by ${module.id}`;
@@ -151,7 +154,7 @@ class Host implements HookHost {
     for (const module of this.modules) {
       if (!module.context || decision === "deny") continue;
       try {
-        const result = await module.context({ event, input, context });
+        const result = await module.context({ event, input: frozenView(input), context });
         if (result) contextAdditions.push(...(typeof result.context === "string" ? [result.context] : result.context));
       } catch (error) {
         ({ decision, reason } = await this.handleFailure(module, event, context, "context", error, decision, reason, input));
@@ -161,13 +164,13 @@ class Host implements HookHost {
     for (const module of this.modules) {
       if (!module.observe) continue;
       try {
-        await module.observe({ event, input, context, decision, reason, contextAdditions });
+        await module.observe({ event, input: frozenView(input), context, decision, reason, contextAdditions });
       } catch (error) {
         await this.handleFailure(module, event, context, "observe", error, decision, reason, input);
       }
     }
 
-    return { decision, reason, input, contextAdditions, auditRecords: this.audit.records.slice(start) };
+    return { decision, reason, mutated, input, contextAdditions, auditRecords: this.audit.records.slice(start) };
   }
 
   private isSafeMode(): boolean {
@@ -185,7 +188,8 @@ class Host implements HookHost {
     return {
       decision: allow ? "allow" : "deny",
       reason,
-      input: { ...event.input },
+      mutated: false,
+      input: cloneDeep(event.input),
       contextAdditions: [],
       auditRecords: this.audit.records.slice(start),
     };
