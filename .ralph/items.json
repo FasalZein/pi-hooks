@@ -104,7 +104,7 @@
         "Run red, record evidence in .ralph/progress.md",
         "Implement the message formatter in src/policy-engine.ts consuming the rule's id/scope/remedy fields; run npm run verify green"
       ],
-      "passes": false,
+      "passes": true,
       "regression_notes": ""
     }
   ]

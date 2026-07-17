@@ -602,3 +602,60 @@ describe("SLICE-0011 item 7: provider-tool parity", () => {
     });
   }, 30_000);
 });
+
+describe("SLICE-0011 item 8: agent-first policy messages", () => {
+  const forbiddenEnforcementClaims = /OS[- ]level|OS containment|universal enforcement|universally enforced/i;
+
+  it("surfaces a plain deny rule's id, scope, and concrete remedy in the model-visible result", async () => {
+    const markerPath = join(await mkdtemp(join(tmpdir(), "pi-hooks-message-")), "marker.txt");
+    const config = policyConfig(
+      [{
+        id: "deny-sensitive-marker",
+        match: { tool: "marker" },
+        decision: "deny",
+        scope: "sensitive marker writes",
+        remedy: "use the read tool instead",
+      }],
+      [{ id: "marker-tools", enabled: true }],
+    );
+
+    await withPolicySession({ config, extensionSource: markerPolicySource(markerPath) }, async (session) => {
+      const direct = await emitToolCall(session, "marker", { note: "blocked" });
+      expect(direct).toMatchObject({ block: true });
+      expect(direct?.reason).toContain("deny-sensitive-marker");
+      expect(direct?.reason).toContain("severity: deny");
+
+      const result = await runScriptedToolTurn(session, { name: "marker", arguments: { note: "blocked" } });
+      expect(result.isError).toBe(true);
+      expect(result.text).toContain("deny-sensitive-marker");
+      expect(result.text).toContain("sensitive marker writes");
+      expect(result.text).toContain("use the read tool instead");
+      expect(result.text).not.toMatch(forbiddenEnforcementClaims);
+      expect(await markerExecutions(markerPath)).toBe(0);
+    });
+  }, 30_000);
+
+  it("surfaces an unattended ask denial's id, scope, and concrete remedy in the model-visible result", async () => {
+    const markerPath = join(await mkdtemp(join(tmpdir(), "pi-hooks-message-")), "marker.txt");
+    const config = policyConfig(
+      [{
+        id: "ask-sensitive-marker",
+        match: { tool: "marker" },
+        decision: "ask",
+        scope: "elevated marker writes",
+        remedy: "rerun with an attached UI and approve the prompt",
+      }],
+      [{ id: "marker-tools", enabled: true }],
+    );
+
+    await withPolicySession({ config, extensionSource: markerPolicySource(markerPath) }, async (session) => {
+      const result = await runScriptedToolTurn(session, { name: "marker", arguments: { note: "blocked" } });
+      expect(result.isError).toBe(true);
+      expect(result.text).toContain("ask-sensitive-marker");
+      expect(result.text).toContain("elevated marker writes");
+      expect(result.text).toContain("rerun with an attached UI and approve the prompt");
+      expect(result.text).not.toMatch(forbiddenEnforcementClaims);
+      expect(await markerExecutions(markerPath)).toBe(0);
+    });
+  }, 30_000);
+});

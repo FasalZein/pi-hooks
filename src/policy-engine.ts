@@ -129,7 +129,7 @@ async function decideGuard(
     // Hard-denies are unapprovable: never consult the interaction broker.
     return {
       decision: "deny",
-      reason: `Policy Engine rule "${winner.id}" (severity: hard-deny) denies tool "${toolName}"`,
+      reason: denialReason(winner, toolName),
     };
   }
   if (winner.decision === "ask") {
@@ -145,14 +145,14 @@ async function decideGuard(
     if (outcome !== "approved") {
       return {
         decision: "deny",
-        reason: askDenialReason(winner, toolName, "approval was not granted"),
+        reason: denialReason(winner, toolName, "approval was not granted"),
       };
     }
     const toolCallId = invocation.event.toolCallId;
     if (toolCallId === undefined) {
       return {
         decision: "deny",
-        reason: askDenialReason(winner, toolName, "approval could not be bound to this tool call"),
+        reason: denialReason(winner, toolName, "approval could not be bound to this tool call"),
       };
     }
     approvals.set(toolCallId, {
@@ -165,7 +165,7 @@ async function decideGuard(
   // A plain deny blocks at this observed boundary.
   return {
     decision: "deny",
-    reason: `Policy Engine rule "${winner.id}" (severity: ${winner.decision}) denies tool "${toolName}"`,
+    reason: denialReason(winner, toolName),
   };
 }
 
@@ -188,13 +188,13 @@ function validateFinalApproval(
   if (Date.now() >= approval.expiresAt) {
     return {
       decision: "deny",
-      reason: askDenialReason(approval.rule, toolName, "approval expired before Host-final validation"),
+      reason: denialReason(approval.rule, toolName, "approval expired before Host-final validation"),
     };
   }
   if (toolCallFingerprint(toolName, invocation.input) !== approval.fingerprint) {
     return {
       decision: "deny",
-      reason: askDenialReason(approval.rule, toolName, "Host-final input no longer matches the approved action"),
+      reason: denialReason(approval.rule, toolName, "Host-final input no longer matches the approved action"),
     };
   }
   return undefined;
@@ -205,8 +205,9 @@ function toolCallFingerprint(toolName: string, input: Readonly<Record<string, un
   return createHash("sha256").update(serialized ?? "null").digest("hex");
 }
 
-function askDenialReason(rule: PolicyRuleConfig, toolName: string, detail: string): string {
-  return `Policy Engine rule "${rule.id}" (severity: ask) denies tool "${toolName}": ${detail}`;
+function denialReason(rule: PolicyRuleConfig, toolName: string, detail?: string): string {
+  const guidance = `Scope: ${rule.scope}. Remedy: ${rule.remedy}.`;
+  return `Policy Engine rule "${rule.id}" (severity: ${rule.decision}) denies tool "${toolName}". ${guidance}${detail === undefined ? "" : ` Detail: ${detail}.`}`;
 }
 
 /** Highest severity wins; same-severity ties go to the smallest rule id. */

@@ -164,3 +164,23 @@
 **Verification:** Initial focused run `npx vitest run test/policy-engine.test.ts --reporter=json --outputFile=/tmp/vitest-item7-initial.json` → exit 0, 19/19 passed. Required gate `npm run verify` → exit 0: tsc clean, eslint clean, vitest 101/101 across 6 files; all prior tests remained green.
 
 **Next-iteration notes:** Provider-tool parity is now pinned at the scripted execution seam; no implementation divergence was found.
+
+## Iteration 8 — Item 8: Agent-first policy messages (functional)
+
+**Decision rationale:** The only unfinished item in the authoritative `.ralph/items.json`. It completes the Policy Engine boundary output by carrying actionable rule attribution into the model-visible blocked tool result.
+
+**Startup state:** Branch `main` matched the required branch. The only launch status entry was untracked `.ralph/loop.md`; it was left untouched and unstaged as the active harness runtime-control file. There was no crashed prior-item code or bundle diff to finish or reset.
+
+**Red evidence:** Added two scripted-turn message tests first, then ran `npx vitest run test/policy-engine.test.ts --reporter=json --outputFile=/tmp/vitest-item8-red.json` before implementation → exit 1. The suite had 19 passing and 2 failing tests: the plain deny output lacked `sensitive marker writes`, and the unattended ask-deny output lacked `elevated marker writes`. Both failures proved the existing boundary reason exposed rule id/severity but omitted the configured scope and remedy.
+
+**What was done:**
+- `src/policy-engine.ts`: centralized all Policy Engine block reasons in `denialReason`. Plain deny, hard-deny, unattended/rejected ask, missing call binding, expired approvals, and Host-final fingerprint mismatches now retain the existing rule id/severity/tool prefix and append `Scope: ...` plus `Remedy: ...`; branch-specific failure detail follows when present.
+- `test/policy-engine.test.ts`: added scripted agent-turn coverage for a plain deny and an unattended ask-resolved-to-deny. Both assert the model-visible tool result contains the winning rule id, configured scope, and concrete remedy; the marker side effect remains absent; and the output contains no OS-level, containment, or universal-enforcement claim. The plain-deny case also pins the direct-dispatch reason's matching rule id and severity.
+
+**Assumptions (conservative, reversible):** Pi already surfaces the Host block reason as the model-visible error tool result, so formatting the existing reason at the provider boundary is the smallest correct seam. The formatter uses declarative rule text verbatim and adds only neutral labels; it makes no enforcement claim beyond the observed public `tool_call` boundary.
+
+**Changed files:** `src/policy-engine.ts`, `test/policy-engine.test.ts`, `.ralph/items.json`, `.ralph/progress.md`.
+
+**Verification:** Focused post-implementation run `npx vitest run test/policy-engine.test.ts --reporter=json --outputFile=/tmp/vitest-item8-green.json` → exit 0, 21/21 passed. Required gate `npm run verify` → exit 0: tsc clean, eslint clean, vitest 103/103 across 6 files; all prior tests remained green.
+
+**Next-iteration notes:** All authoritative items now pass.
