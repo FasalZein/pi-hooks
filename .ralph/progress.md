@@ -143,3 +143,24 @@
 **Verification:** Focused post-implementation run `npx vitest run test/policy-engine.test.ts --reporter=json --outputFile=/tmp/vitest-item6-green.json` → exit 0, 18/18 passed. Required gate `npm run verify` → exit 0: tsc clean, eslint clean, vitest 100/100 across 6 files; all prior tests remained green.
 
 **Next-iteration notes:** Select work only from the authoritative `.ralph/items.json` using `.ralph/plan.md` prioritization.
+
+## Iteration 7 — Item 7: Provider-tool parity (functional)
+
+**Decision rationale:** First unfinished item per the authoritative plan order. The item explicitly permits a verification-only result when provider-registered and built-in tools already share the observed public `tool_call` dispatch path.
+
+**Startup state:** Branch `main` matched the required branch. The only launch status entry was untracked `.ralph/loop.md`; inspection confirmed it is the active harness runtime-control file. It was left untouched and unstaged as required. There was no crashed prior-item code or committed-bundle diff to finish or reset.
+
+**Red evidence / initial test result:** Added the item-specific scripted-turn parity test first, then ran `npx vitest run test/policy-engine.test.ts --reporter=json --outputFile=/tmp/vitest-item7-initial.json` before any implementation change → exit 0, 19/19 passed. Per the item's explicit verification-only branch, this green first run is evidence that no gating gap exists: both tool kinds already traverse the same dispatch boundary, so no production fix was invented.
+
+**What was done:**
+- `test/policy-engine.test.ts`: added a scripted agent-turn test using the existing tools-grant marker provider. One deny rule targets both the extension-registered `marker` tool and Pi's built-in `read` tool.
+- The test pins provenance setup (`marker` is non-builtin; `read` is builtin), proves the denied provider tool never executes via the marker file, asserts both model-visible tool results are errors, and extracts the denial-reason shape to prove both carry the same winning rule id (`deny-tool-parity`) and severity (`deny`).
+- No audit target-provenance assertion was added, and no production code changed.
+
+**Assumptions (conservative, reversible):** The built-in `read` tool is a safe parity counterpart because the deny blocks at the observed public `tool_call` boundary before execution. Exact full output strings include the target tool name by design, so parity is asserted on outcome plus the rule-attribution shape rather than requiring different tool names to produce byte-identical messages.
+
+**Changed files:** `test/policy-engine.test.ts`, `.ralph/items.json`, `.ralph/progress.md`.
+
+**Verification:** Initial focused run `npx vitest run test/policy-engine.test.ts --reporter=json --outputFile=/tmp/vitest-item7-initial.json` → exit 0, 19/19 passed. Required gate `npm run verify` → exit 0: tsc clean, eslint clean, vitest 101/101 across 6 files; all prior tests remained green.
+
+**Next-iteration notes:** Provider-tool parity is now pinned at the scripted execution seam; no implementation divergence was found.

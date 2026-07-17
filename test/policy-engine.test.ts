@@ -574,3 +574,31 @@ describe("SLICE-0011 item 5: hard-deny composition", () => {
     expect(resultB).toEqual(resultA);
   }, 60_000);
 });
+
+describe("SLICE-0011 item 7: provider-tool parity", () => {
+  it("gates a provider tool and a builtin tool with the same deny outcome at the scripted turn seam", async () => {
+    const markerPath = join(await mkdtemp(join(tmpdir(), "pi-hooks-parity-")), "marker.txt");
+    const config = policyConfig(
+      [{ id: "deny-tool-parity", match: { tool: ["marker", "read"] }, decision: "deny", scope: "tool parity", remedy: "use an allowed tool" }],
+      [{ id: "marker-tools", enabled: true }],
+    );
+
+    await withPolicySession({ config, extensionSource: markerPolicySource(markerPath) }, async (session) => {
+      expect(session.getAllTools().find((tool) => tool.name === "marker")?.sourceInfo.source).not.toBe("builtin");
+      expect(session.getAllTools().find((tool) => tool.name === "read")?.sourceInfo.source).toBe("builtin");
+
+      const providerResult = await runScriptedToolTurn(session, { name: "marker", arguments: { note: "blocked" } });
+      const builtinResult = await runScriptedToolTurn(session, { name: "read", arguments: { path: hooksIndexPath } });
+
+      expect(providerResult.isError).toBe(true);
+      expect(builtinResult.isError).toBe(true);
+      expect(await markerExecutions(markerPath)).toBe(0);
+
+      const denialShape = /Policy Engine rule "([^"]+)" \(severity: ([^)]+)\) denies tool "[^"]+"/;
+      const providerShape = providerResult.text.match(denialShape)?.slice(1);
+      const builtinShape = builtinResult.text.match(denialShape)?.slice(1);
+      expect(providerShape).toEqual(["deny-tool-parity", "deny"]);
+      expect(builtinShape).toEqual(providerShape);
+    });
+  }, 30_000);
+});

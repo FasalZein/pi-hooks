@@ -92,7 +92,7 @@
         "If the test is red, record evidence in .ralph/progress.md and implement the gap; if it is green because all tool_calls already flow through the same dispatch path, record that finding in .ralph/progress.md and keep the test as the parity pin — this item is then test-only",
         "Run npm run verify green"
       ],
-      "passes": false,
+      "passes": true,
       "regression_notes": ""
     },
     {
