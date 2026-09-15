@@ -321,8 +321,8 @@ function scriptedAssistant(content: readonly unknown[], stopReason: "toolUse" | 
 }
 
 /** Scripted agent turn seam (see .ralph/plan.md "Test seams"): a deterministic
- * session.agent.streamFn whose first turn requests one marker tool call and
- * whose second turn stops. The marker side effect proves "executed"; its
+ * session.agent.streamFunction whose first turn requests one marker tool call
+ * and whose second turn stops. The marker side effect proves "executed"; its
  * absence proves "never executed"; the toolResult message in the transcript is
  * the model-visible output. */
 let scriptedToolCallSequence = 0;
@@ -334,7 +334,7 @@ async function runScriptedToolTurn(
   const toolCallId = `scripted-call-${++scriptedToolCallSequence}`;
   let turn = 0;
   session.agent.state.model = scriptedModel as never;
-  session.agent.streamFn = ((): unknown => {
+  session.agent.streamFunction = ((): unknown => {
     turn += 1;
     const message = turn === 1
       ? scriptedAssistant([{ type: "toolCall", id: toolCallId, name: toolCall.name, arguments: toolCall.arguments }], "toolUse")

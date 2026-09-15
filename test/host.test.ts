@@ -62,7 +62,7 @@ const ctx = {
 };
 
 describe("Hook Host dispatch and Pi adapter", () => {
-  it("loads through Pi 0.80.7 public SDK APIs without tools or prompt additions", async () => {
+  it("loads through Pi 0.85.1 public SDK APIs without tools or prompt additions", async () => {
     const agentDir = await mkdtemp(join(tmpdir(), "pi-hooks-agent-"));
     await writeFile(join(agentDir, "pi-hooks.jsonc"), validConfig());
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -138,7 +138,7 @@ describe("Hook Host dispatch and Pi adapter", () => {
     expect(configSource).toContain('from "typebox/value";');
 
     // Remove the installed typebox copy: every typebox import must resolve
-    // through Pi 0.80.7 loader aliases; tmpdir offers no repository fallback.
+    // through Pi 0.85.1 loader aliases; tmpdir offers no repository fallback.
     await rm(join(installDir, "node_modules", "typebox"), { recursive: true, force: true });
 
     const loadSession = async (config: string) => {

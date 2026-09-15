@@ -4,7 +4,7 @@ import type { CapabilityProvider, GrantFacade, HookModule } from "../src/index.j
 /**
  * Compile-time contract (SLICE-0007/SLICE-0008): HookModule effects are
  * event-keyed. The four effect-bearing events expose exactly the effects Pi
- * 0.80.7 consumes; the five observe-only events expose observe only. These
+ * 0.85.1 consumes; the five observe-only events expose observe only. These
  * assertions run under `npm run verify` typecheck (tsconfig includes test/).
  */
 
@@ -144,7 +144,7 @@ describe("capability grant facade contract", () => {
 });
 
 describe("event-keyed HookModule contract", () => {
-  it("accepts exactly the per-event effects Pi 0.80.7 consumes", () => {
+  it("accepts exactly the per-event effects Pi 0.85.1 consumes", () => {
     const modules = [
       effectBearing,
       observeOnly,

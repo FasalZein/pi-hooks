@@ -1,10 +1,10 @@
 # @tothemoon/pi-hooks
 
-An extension-only Hook Host and capability platform for Pi 0.80.7. It runs trusted Hook Modules in deterministic internal phases:
+An extension-only Hook Host and capability platform for Pi 0.85.1. It runs trusted Hook Modules in deterministic internal phases:
 
 `guard → transform → internal-final → context → observe`
 
-and loads trusted **Capability Providers**, each declaring exactly the grants it needs (`events`, `tools`, `commands`, `process`, `ui`). The Host hands each provider only its declared, typed API subset.
+and loads trusted **Capability Providers**, each declaring exactly the grants it needs (`events`, `tools`, `commands`, `process`, `ui`, `interaction`). The Host hands each provider only its declared, typed API subset.
 
 ## Configuration
 

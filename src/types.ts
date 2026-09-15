@@ -136,7 +136,7 @@ export interface ObserveOnlyHandlers {
 
 /**
  * Event-keyed Hook Module contract (SLICE-0007/SLICE-0008): each exposed event
- * offers exactly the effects the real Pi 0.80.7 adapter consumes for it, so an
+ * offers exactly the effects the real Pi 0.85.1 adapter consumes for it, so an
  * unsupported effect is unexpressible by type rather than silently discarded.
  */
 export interface HookModule {
