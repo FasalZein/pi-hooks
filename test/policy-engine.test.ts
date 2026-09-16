@@ -43,8 +43,9 @@ async function withPolicySession<T>(
   }
 }
 
-/** The real bundled surface: src/index.ts's default export carries the Policy Engine. */
-const bundledSource = `export { default } from ${JSON.stringify(hooksIndexPath)};`;
+/** Policy tests select the Provider explicitly; the default export is a Bare Host. */
+const bundledSource = `import { createPiHooksExtension, policyEngineProvider } from ${JSON.stringify(hooksIndexPath)};
+export default createPiHooksExtension({ providers: [policyEngineProvider] });`;
 
 /** Policy Engine plus a second tools-grant provider, for provenance matching. */
 function withGreeterSource(): string {

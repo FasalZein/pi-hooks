@@ -30,7 +30,6 @@ import type {
   ToolResultPatch,
 } from "./types.js";
 
-const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
 const EFFECT_BEARING = new Set<NormalizedEvent["type"]>(["input", "tool_call", "tool_result", "context"]);
 const FINAL_BOUNDARY = "Authoritative only inside this Host tool_call handler; a later Pi extension can still mutate input before execution.";
 const PROCESS_GRANT_NOTE = "process-grant child processes run with the Pi process's OS permissions, outside the observed tool_call boundary; the Host best-effort-terminates their process group at shutdown but does not sandbox them, and a child that re-parents into its own session can escape.";
@@ -62,6 +61,7 @@ export async function createHookHost(options: CreateHookHostOptions = {}): Promi
   let phaseOrder = emptyPhaseOrder();
   let required = new Map<string, boolean>();
   let failure: string | undefined;
+  let preparationFailures: string[] = [];
 
   try {
     config = await loadGlobalConfig(configPath);
@@ -76,6 +76,7 @@ export async function createHookHost(options: CreateHookHostOptions = {}): Promi
     const policy = preparePolicy(available, config);
     if (policy.ok) {
       ({ modules, phaseOrder, required } = policy);
+      preparationFailures = policy.failures;
       if (activation.modules.length > 0) {
         try {
           const combined = resolveOrder([...policy.modules, ...activation.modules]);
@@ -94,8 +95,14 @@ export async function createHookHost(options: CreateHookHostOptions = {}): Promi
 
   const audit = new AuditLog(config?.audit?.path, config?.audit?.includeAllows);
   if (activation) for (const record of activation.records) await audit.record(record);
-  const host = new Host(configPath, config, modules, phaseOrder, required, audit, failure, activation, interaction);
-  if (failure) await host.recordSafeMode(failure);
+  const requiredFailure = activation?.providers.find((provider) => provider.required && provider.health === "degraded");
+  const activationFailure = failure ?? (requiredFailure ? `provider ${requiredFailure.id}: ${requiredFailure.lastFailure}` : undefined);
+  if (activationFailure) {
+    modules = [];
+    phaseOrder = emptyPhaseOrder();
+  }
+  const host = new Host(configPath, config, modules, phaseOrder, required, audit, failure, activation, interaction, activationFailure, preparationFailures);
+  if (activationFailure) await host.recordInactive(activationFailure);
   return host;
 }
 
@@ -155,6 +162,8 @@ class Host implements HookHost {
     failure: string | undefined,
     activation: ProviderActivation | undefined,
     private readonly interaction: InteractionBroker,
+    private readonly activationFailure: string | undefined,
+    preparationFailures: string[],
   ) {
     this.configFailure = failure;
     this.providers = activation?.providers ?? [];
@@ -163,14 +172,13 @@ class Host implements HookHost {
     this.pendingProcesses = activation?.processes ?? [];
     this.pendingUiOps = activation?.uiOps ?? [];
     this.providerByModuleId = activation?.providerByModuleId ?? new Map();
-    // An isolated provider degrades the runtime lane only; configuration stays
-    // valid and the host stays out of safe mode for a single bad provider.
-    const degraded = this.providers.find((provider) => provider.health === "degraded");
-    if (degraded) this.runtimeFailure = `provider ${degraded.id} ${degraded.lastFailure ?? "isolated"}`;
+    const failures = this.providers.filter((provider) => provider.health === "degraded")
+      .map((provider) => `provider ${provider.id} ${provider.lastFailure ?? "isolated"}`);
+    this.runtimeFailure = [...preparationFailures, ...failures].join("; ") || undefined;
   }
 
   bindPi(bindings: PiGrantBindings): void {
-    if (this.isSafeMode()) return;
+    if (this.isInactive()) return;
     for (const registration of this.pendingTools) bindings.registerTool(registration.tool);
     for (const registration of this.pendingCommands) bindings.registerCommand(registration.name, registration.command);
   }
@@ -182,7 +190,7 @@ class Host implements HookHost {
    * failures degrade the owning provider instead of being swallowed.
    */
   private startProcesses(): void {
-    if (this.isSafeMode() || this.processesStarted) return;
+    if (this.isInactive() || this.processesStarted) return;
     this.processesStarted = true;
     for (const { providerId, spec } of this.pendingProcesses) {
       try {
@@ -268,20 +276,20 @@ class Host implements HookHost {
 
   /** ui grant: apply captured status/widget ops through the real Pi ctx.ui. */
   private flushUi(context: DispatchContext): void {
-    if (this.isSafeMode() || !context.ui) return;
+    if (this.isInactive() || !context.ui) return;
     for (const op of this.pendingUiOps) {
       if (op.kind === "status") context.ui.setStatus(op.key, op.text);
       else context.ui.setWidget?.(op.key, op.lines);
     }
   }
 
-  async recordSafeMode(reason: string): Promise<void> {
+  async recordInactive(reason: string): Promise<void> {
     await this.audit.record({
       timestamp: new Date().toISOString(),
       moduleId: "host",
       eventType: "session_start",
       phase: "host",
-      decision: "safe-mode",
+      decision: "inactive",
       reason,
     });
   }
@@ -309,13 +317,13 @@ class Host implements HookHost {
         id: provider.id,
         source: provider.source,
         grants: provider.grants,
-        enabled: provider.enabled,
+        enabled: !this.isInactive() && provider.enabled,
         required: provider.required,
         health: provider.health,
         ...(provider.lastFailure ? { lastFailure: provider.lastFailure } : {}),
       })),
       phaseOrder: this.phaseOrder,
-      mode: this.isSafeMode() ? "read-only-safe" : "normal",
+      activation: this.isInactive() ? "inactive" : "active",
       audit,
       finalInterceptor: { available: false, boundary: FINAL_BOUNDARY },
       grantBoundary: { processToolCallGated: false, note: PROCESS_GRANT_NOTE },
@@ -330,7 +338,7 @@ class Host implements HookHost {
     } else if (event.type === "session_shutdown") {
       this.killProcesses();
     }
-    if (this.isSafeMode()) return this.safeModeDispatch(event, context);
+    if (this.isInactive()) return this.passThrough(event);
     switch (event.type) {
       case "input":
         return this.dispatchInput(event, context);
@@ -584,21 +592,15 @@ class Host implements HookHost {
     await this.writeDecision("host", event, context, "host", "allow", undefined, input);
   }
 
-  private isSafeMode(): boolean {
-    return this.config === undefined || this.configFailure !== undefined && this.modules.length === 0;
+  private isInactive(): boolean {
+    return this.activationFailure !== undefined;
   }
 
-  private async safeModeDispatch(event: NormalizedEvent, context: DispatchContext): Promise<DispatchResult> {
+  private passThrough(event: NormalizedEvent): DispatchResult {
     if (event.type === "tool_call") {
-      const allow = READ_ONLY_TOOLS.has(event.toolName ?? "") && event.provenance?.source === "builtin";
-      const reason = allow
-        ? undefined
-        : "Denied by Read-Only Safe Mode: trusted global configuration is invalid and only built-in read-only tools with trusted provenance may run";
-      if (!allow) await this.writeDecision("host", event, context, "host", "deny", reason, event.input);
       return {
         event: "tool_call",
-        decision: allow ? "allow" : "deny",
-        reason,
+        decision: "allow",
         mutated: false,
         input: cloneDeep(event.input),
         contextAdditions: [],

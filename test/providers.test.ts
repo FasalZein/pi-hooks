@@ -186,7 +186,7 @@ describe("SLICE-0009 AC2: manifest and config-schema validation isolates a provi
       schemaVersion: 2,
       providers: [
         { id: "good", enabled: true },
-        { id: "bad-config", enabled: true, config: { threshold: "not-a-number" } },
+        { id: "bad-config", enabled: true, required: false, config: { threshold: "not-a-number" } },
       ],
       audit: { path: auditPath },
     });
@@ -213,7 +213,7 @@ describe("SLICE-0009 AC2: manifest and config-schema validation isolates a provi
       schemaVersion: 2,
       providers: [
         { id: "healthy", enabled: true },
-        { id: "broken", enabled: true },
+        { id: "broken", enabled: true, required: false },
       ],
     }));
     const healthy = defineProvider({
@@ -227,11 +227,10 @@ describe("SLICE-0009 AC2: manifest and config-schema validation isolates a provi
     });
     const host = await createHookHost({ configPath, providers: [healthy, broken] });
     const status = host.status();
-    // An isolated provider degrades runtime health only — configuration stays
-    // valid and the host stays in normal mode (never safe mode for one bad optional provider).
+    // Optional Provider failure leaves the Host active and degrades runtime health.
     expect(status.runtime.health).toBe("degraded");
     expect(status.configuration.health).toBe("valid");
-    expect(status.mode).toBe("normal");
+    expect(status.activation).toBe("active");
   });
 });
 
@@ -365,7 +364,7 @@ export default createPiHooksExtension({ providers: [widgeter] });
   }, 30_000);
 });
 
-describe("SLICE-0009 AC4: schemaVersion 2 migration and safe-mode fallback", () => {
+describe("SLICE-0009 AC4: schemaVersion 2 migration and Inactive Host", () => {
   it("migrates a schemaVersion 1 file to v2 with an empty providers section, preserving modules", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-hooks-migrate-"));
     const path = join(dir, "pi-hooks.jsonc");
@@ -398,7 +397,7 @@ describe("SLICE-0009 AC4: schemaVersion 2 migration and safe-mode fallback", () 
     const path = join(dir, "pi-hooks.jsonc");
     await writeFile(path, JSON.stringify({ schemaVersion: 3 }));
     const host = await createHookHost({ configPath: path });
-    expect(host.status().mode).toBe("read-only-safe");
+    expect(host.status().activation).toBe("inactive");
     expect(host.status().configuration.health).toBe("invalid");
   });
 });
@@ -409,7 +408,7 @@ describe("SLICE-0009 AC5: status lists providers and audit carries provider attr
     const configPath = join(dir, "pi-hooks.jsonc");
     await writeFile(configPath, JSON.stringify({
       schemaVersion: 2,
-      providers: [{ id: "healthy", enabled: true }, { id: "broken", enabled: true }],
+      providers: [{ id: "healthy", enabled: true }, { id: "broken", enabled: true, required: false }],
     }));
     const healthy = defineProvider({
       manifest: { id: "healthy", version: "1.0.0", grants: ["events"] },
@@ -567,7 +566,7 @@ export default createPiHooksExtension({ providers: [halfBaked] });
     const configPath = join(dir, "pi-hooks.jsonc");
     await writeFile(configPath, JSON.stringify({
       schemaVersion: 2,
-      providers: [{ id: "garbage", enabled: true }, { id: "good", enabled: true }],
+      providers: [{ id: "garbage", enabled: true, required: false }, { id: "good", enabled: true }],
     }));
     // A dynamically-loaded provider whose manifest.grants getter throws.
     const garbage = {

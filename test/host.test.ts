@@ -180,18 +180,21 @@ describe("Hook Host dispatch and Pi adapter", () => {
       healthy.dispose();
     }
 
-    // Invalid config: schema error enumeration (typebox/value) drives Read-Only Safe Mode.
-    const safeMode = await loadSession(JSON.stringify({ schemaVersion: 3, modules: [] }));
+    // ADR-001: schema errors leave an inspectable Inactive Host, not a fallback policy.
+    const inactive = await loadSession(JSON.stringify({ schemaVersion: 3, modules: [] }));
     try {
-      const denied = await safeMode.extensionRunner!.emitToolCall({
+      const result = await inactive.extensionRunner!.emitToolCall({
         type: "tool_call",
         toolName: "write",
         toolCallId: "alias-bad",
         input: { path: "x", content: "y" },
       } as never);
-      expect(denied).toMatchObject({ block: true, reason: expect.stringContaining("Read-Only Safe Mode") });
+      expect(result).toBeUndefined();
+      const notices: string[] = [];
+      await inactive.extensionRunner!.getCommand("hooks")!.handler("status", { ui: { notify: (text: string) => notices.push(text) } } as never);
+      expect(JSON.parse(notices[0])).toMatchObject({ activation: "inactive", configuration: { lastFailure: expect.stringContaining("Schema validation failed") } });
     } finally {
-      safeMode.dispose();
+      inactive.dispose();
     }
   }, 60_000);
 
@@ -294,7 +297,7 @@ describe("ordering and effective policy validation", () => {
     expect(host.status().phaseOrder.guard).toEqual(["a", "b", "c"]);
   });
 
-  it("sources requiredness from trusted global config: missing optional degrades, missing required enters safe mode", async () => {
+  it("sources requiredness from trusted global config: missing optional degrades, missing required makes the Host inactive", async () => {
     const optionalMissing = await fixture(JSON.stringify({
       schemaVersion: 1,
       modules: [{ id: "present", enabled: true }, { id: "ghost", enabled: true, required: false }],
@@ -304,8 +307,9 @@ describe("ordering and effective policy validation", () => {
       modules: [{ id: "present", tool_call: { guard: () => undefined } }],
     });
     const status = degradedHost.status();
-    expect(status.mode).toBe("normal");
+    expect(status.activation).toBe("active");
     expect(status.configuration.health).toBe("valid");
+    expect(status.runtime).toMatchObject({ health: "degraded", lastFailure: expect.stringContaining("ghost") });
     expect(status.modules).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: "present", enabled: true, required: true }),
       expect.objectContaining({ id: "ghost", enabled: false, required: false }),
@@ -322,7 +326,7 @@ describe("ordering and effective policy validation", () => {
     }));
     const safeHost = await createHookHost({ configPath: requiredMissing.configPath, modules: [] });
     expect(safeHost.status()).toMatchObject({
-      mode: "read-only-safe",
+      activation: "inactive",
       configuration: { health: "invalid", lastFailure: expect.stringContaining("ghost") },
     });
   });
@@ -337,7 +341,7 @@ describe("ordering and effective policy validation", () => {
       ],
     });
     expect(host.status()).toMatchObject({
-      mode: "read-only-safe",
+      activation: "inactive",
       configuration: { health: "invalid", lastFailure: expect.stringContaining("dup") },
     });
   });
@@ -358,7 +362,7 @@ describe("ordering and effective policy validation", () => {
         { id: "b", after: ["a"], tool_call: { guard: () => undefined } },
       ],
     });
-    expect(cycleHost.status()).toMatchObject({ mode: "read-only-safe", configuration: { health: "invalid" } });
+    expect(cycleHost.status()).toMatchObject({ activation: "inactive", configuration: { health: "invalid" } });
 
     const missing = await fixture(validConfig(["a"]));
     const missingHost = await createHookHost({
@@ -369,27 +373,26 @@ describe("ordering and effective policy validation", () => {
   });
 });
 
-describe("configuration, safe mode, audit, and status", () => {
-  it("parses JSONC, validates schema, and enters Read-Only Safe Mode on invalid initial config", async () => {
+describe("configuration, activation, audit, and status", () => {
+  it("parses JSONC, validates schema, and makes the Host inactive on invalid initial config", async () => {
     const good = await fixture(`{
       // trusted global configuration
       "schemaVersion": 1,
       "modules": [],
     }`);
-    expect((await createHookHost({ configPath: good.configPath, modules: [] })).status().mode).toBe("normal");
+    expect((await createHookHost({ configPath: good.configPath, modules: [] })).status().activation).toBe("active");
 
     const bad = await fixture(`{ "schemaVersion": 3, "modules": [] }`);
     const host = await createHookHost({ configPath: bad.configPath, modules: [] });
-    // Provenance-less detached dispatch fails closed for safe-mode reads (SLICE-0008):
-    // only the real adapter path can attest trusted built-in provenance.
+    // ADR-001: invalid configuration supplies no policy, regardless of tool provenance.
     const read = await host.dispatch(normalizeEvent("tool_call", { toolName: "read", toolCallId: "r", input: { path: "x" } }), ctx as never);
     const write = await host.dispatch(normalizeEvent("tool_call", { toolName: "write", toolCallId: "w", input: { path: "x", content: "secret" } }), ctx as never);
-    expect(read).toMatchObject({ decision: "deny", reason: expect.stringContaining("Read-Only Safe Mode") });
-    expect(write).toMatchObject({ decision: "deny", reason: expect.stringContaining("Read-Only Safe Mode") });
-    expect(host.status()).toMatchObject({ mode: "read-only-safe", configuration: { health: "invalid" } });
+    expect(read).toMatchObject({ decision: "allow", mutated: false, input: { path: "x" } });
+    expect(write).toMatchObject({ decision: "allow", mutated: false, input: { path: "x", content: "secret" } });
+    expect(host.status()).toMatchObject({ activation: "inactive", configuration: { health: "invalid" } });
   });
 
-  it("audits safe-mode entry and module failures", async () => {
+  it("audits Inactive Host entry and module failures", async () => {
     const safe = await fixture(validConfig());
     await writeFile(safe.configPath, JSON.stringify({
       schemaVersion: 1,
@@ -403,7 +406,7 @@ describe("configuration, safe mode, audit, and status", () => {
         { id: "b", after: ["a"] },
       ],
     });
-    expect(await readFile(safe.auditPath, "utf8")).toContain('"decision":"safe-mode"');
+    expect(await readFile(safe.auditPath, "utf8")).toContain('"decision":"inactive"');
 
     const failed = await fixture(validConfig());
     await writeFile(failed.configPath, JSON.stringify({
@@ -509,7 +512,7 @@ describe("configuration, safe mode, audit, and status", () => {
     expect(JSON.stringify(lines)).not.toContain("hunter2");
   });
 
-  it("contains safe-mode startup audit failures and keeps enforcement registered", async () => {
+  it("contains Inactive Host startup audit failures and keeps status registered", async () => {
     const { configPath, auditPath } = await fixture(validConfig());
     await mkdir(auditPath);
     await writeFile(configPath, JSON.stringify({
@@ -530,12 +533,12 @@ describe("configuration, safe mode, audit, and status", () => {
     await expect(pi.handlers.get("tool_call")?.(
       { type: "tool_call", toolName: "write", toolCallId: "safe", input: { path: "x" } },
       ctx,
-    )).resolves.toMatchObject({ block: true, reason: expect.stringContaining("Read-Only Safe Mode") });
+    )).resolves.toBeUndefined();
 
     const notices: string[] = [];
     await pi.commands.get("hooks")?.handler("status", { ...ctx, ui: { notify: (text: string) => notices.push(text) } });
     expect(JSON.parse(notices[0])).toMatchObject({
-      mode: "read-only-safe",
+      activation: "inactive",
       runtime: { health: "healthy" },
       audit: { health: "degraded", lastFailure: expect.any(String) },
     });
@@ -613,7 +616,7 @@ describe("configuration, safe mode, audit, and status", () => {
       configSource: configPath,
       configuration: { health: "valid" },
       modules: [{ id: "one", enabled: true }],
-      mode: "normal",
+      activation: "active",
       finalInterceptor: { available: false },
     });
     expect(status.phaseOrder.guard).toEqual(["one"]);

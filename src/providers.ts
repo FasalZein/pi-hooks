@@ -113,12 +113,12 @@ export async function activateProviders(
       };
       activation.providers.push(current);
 
+      if (!current.enabled) continue;
       const manifestError = validateSnapshot(snapshot, provider);
       if (manifestError) {
         degrade(current, activation, `manifest invalid: ${manifestError}`);
         continue;
       }
-      if (!current.enabled) continue;
 
       const configError = validateProviderConfig(snapshot.configSchema as TSchema | undefined, entry.config);
       if (configError) {
@@ -263,6 +263,7 @@ function collectingWiring(prepared: PreparedProvider, activation: ProviderActiva
 
 function degrade(prepared: PreparedProvider, activation: ProviderActivation, failure: string): void {
   prepared.health = "degraded";
+  prepared.enabled = false;
   prepared.lastFailure = failure;
   activation.records.push({
     timestamp: new Date().toISOString(),

@@ -1,5 +1,4 @@
 import { createPiHooksExtension } from "./adapter.js";
-import { policyEngineProvider } from "./policy-engine.js";
 
 export { createPiHooksExtension } from "./adapter.js";
 export { normalizeEvent } from "./events.js";
@@ -43,5 +42,5 @@ export type {
   ToolResultPatch,
 } from "./types.js";
 
-/** The bundled surface: the Policy Engine ships as a provider on the public grant lane. */
-export default createPiHooksExtension({ providers: [policyEngineProvider] });
+/** Bare Host: policy is selected only by an explicit composition. */
+export default createPiHooksExtension();

@@ -163,7 +163,7 @@ export interface AuditRecord {
   provider?: string;
   eventType: NormalizedEvent["type"];
   phase: HookPhase | "host";
-  decision: "allow" | "deny" | "mutate" | "module-failure" | "safe-mode" | "grant-refused";
+  decision: "allow" | "deny" | "mutate" | "module-failure" | "inactive" | "grant-refused";
   reason?: string;
   inputSummary?: unknown;
 }
@@ -240,7 +240,7 @@ export interface HostStatus {
     lastFailure?: string;
   }>;
   phaseOrder: Record<HookPhase, string[]>;
-  mode: "normal" | "read-only-safe";
+  activation: "active" | "inactive";
   /** Audit persistence health lane: append/serialization failures only. */
   audit: {
     health: "healthy" | "degraded";

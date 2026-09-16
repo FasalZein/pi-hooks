@@ -20,9 +20,13 @@ Create trusted global JSONC configuration at `~/.pi/agent/pi-hooks.jsonc` (or `$
 }
 ```
 
-`schemaVersion` may be `1` or `2`. A `schemaVersion 1` file is migrated in-memory to `2` at load — the on-disk file is never rewritten. The versioned schema is [`schema/pi-hooks.global.schema.json`](schema/pi-hooks.global.schema.json). Invalid initial configuration enters Read-Only Safe Mode: known read-only Pi tools are allowed and mutating or unknown tools are blocked.
+`schemaVersion` can be `1` or `2`. The Host converts version `1` to `2` in memory without rewriting the file. The editor schema is [`schema/pi-hooks.global.schema.json`](schema/pi-hooks.global.schema.json).
 
-Use `/hooks status` for configuration source and health, enabled modules and providers (with source, grants, and per-provider health), resolved phase order, mode, and enforcement boundary.
+The default export is a Bare Host with no Providers. Missing configuration is a valid empty configuration. Invalid configuration creates an Inactive Host. Both pass Pi events through unchanged. A required component activation failure makes the complete Host inactive before any staged registrations reach Pi. An optional component failure isolates that component and degrades runtime health.
+
+Policy requires an explicit composition with the named `policyEngineProvider` export and authorization in the configuration. Configuration does not load Provider implementations from disk.
+
+Use `/hooks status` for activation, configuration health, runtime health, audit health, Providers and their grants, phase order, and the observed boundary.
 
 ## Enforcement boundary
 

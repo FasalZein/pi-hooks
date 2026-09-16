@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -156,8 +156,8 @@ describe("real Pi adapter: optional module failure semantics", () => {
         expect(failure).toBeDefined();
         expect(JSON.stringify(lines)).not.toContain("hunter2");
         expect(JSON.stringify(lines)).not.toContain("secret-mutation");
-        // Configuration health stays valid: no safe-mode entry was recorded.
-        expect(lines.some((line) => line.decision === "safe-mode")).toBe(false);
+        // Configuration health stays valid: no Inactive Host entry was recorded.
+        expect(lines.some((line) => line.decision === "inactive")).toBe(false);
       },
     );
   }, 30_000);
@@ -208,8 +208,8 @@ describe("real Pi adapter: terminal allow auditing", () => {
   }, 30_000);
 });
 
-describe("real Pi adapter: Read-Only Safe Mode provenance", () => {
-  it("denies a same-name extension read override in safe mode and never executes it", async () => {
+describe("real Pi adapter: Inactive Host leaves tool policy to Pi", () => {
+  it("passes a same-name extension read override through an Inactive Host", async () => {
     const markerPath = join(await mkdtemp(join(tmpdir(), "pi-hooks-marker-")), "executed.txt");
     await withLoadedSession(
       { config: invalidConfig, extraExtensionSource: overrideReadExtension(markerPath) },
@@ -224,13 +224,14 @@ describe("real Pi adapter: Read-Only Safe Mode provenance", () => {
           input: { path: markerPath },
         } as never);
 
-        expect(result).toMatchObject({ block: true, reason: expect.stringContaining("Read-Only Safe Mode") });
-        await expect(stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(result).toBeUndefined();
+        await session.getToolDefinition("read")!.execute("override", { path: markerPath }, undefined, undefined, {} as never);
+        expect(await readFile(markerPath, "utf8")).toBe("executed");
       },
     );
   }, 30_000);
 
-  it("allows the built-in read tool with trusted provenance in safe mode", async () => {
+  it("passes the built-in read tool through an Inactive Host", async () => {
     await withLoadedSession({ config: invalidConfig }, async (session) => {
       const active = session.getAllTools().find((tool) => tool.name === "read");
       expect(active?.sourceInfo.source).toBe("builtin");
@@ -509,7 +510,7 @@ describe("real Pi adapter: module event views cannot reach live Pi state", () =>
 });
 
 describe("real Pi adapter: active-tool provenance", () => {
-  it("denies a built-in read-only tool in safe mode when the tool is not active", async () => {
+  it("leaves active-tool selection to Pi when the Host is inactive", async () => {
     await withLoadedSession({ config: invalidConfig }, async (session) => {
       session.setActiveToolsByName(["bash"]);
       expect(session.getAllTools().find((tool) => tool.name === "read")?.sourceInfo.source).toBe("builtin");
@@ -521,8 +522,9 @@ describe("real Pi adapter: active-tool provenance", () => {
         input: { path: "/tmp/does-not-matter.txt" },
       } as never);
 
-      // Provenance requires the active tool set, not getAllTools membership alone.
-      expect(result).toMatchObject({ block: true, reason: expect.stringContaining("Read-Only Safe Mode") });
+      // The Host supplies no fallback policy even for tools not selected by Pi.
+      expect(result).toBeUndefined();
+      expect(session.getActiveToolNames()).not.toContain("read");
     });
   }, 30_000);
 });
@@ -541,7 +543,7 @@ export default createPiHooksExtension({
 }
 
 describe("real Pi adapter: effective-policy preparation failures", () => {
-  it("rejects duplicate available module ids and enters safe mode at the tool_call boundary", async () => {
+  it("rejects duplicate available module ids and passes calls through an Inactive Host", async () => {
     const config = JSON.stringify({ schemaVersion: 1, modules: [{ id: "twin", enabled: true }] });
     await withLoadedSession(
       { config, extraExtensionSource: duplicateIdExtension(), skipHooksExtension: true },
@@ -552,12 +554,15 @@ describe("real Pi adapter: effective-policy preparation failures", () => {
           toolCallId: "dup-e2e",
           input: { path: "/tmp/x", content: "y" },
         } as never);
-        expect(result).toMatchObject({ block: true, reason: expect.stringContaining("Read-Only Safe Mode") });
+        expect(result).toBeUndefined();
+        const notices: string[] = [];
+        await session.extensionRunner!.getCommand("hooks")!.handler("status", { ui: { notify: (text: string) => notices.push(text) } } as never);
+        expect(JSON.parse(notices[0])).toMatchObject({ activation: "inactive", configuration: { lastFailure: expect.stringContaining("twin") } });
       },
     );
   }, 30_000);
 
-  it("degrades on a missing optional module but enters safe mode on a missing required module", async () => {
+  it("degrades on a missing optional module but becomes inactive on a missing required module", async () => {
     const optionalMissing = JSON.stringify({
       schemaVersion: 1,
       modules: [{ id: "benign", enabled: true }, { id: "ghost", enabled: true, required: false }],
@@ -583,7 +588,10 @@ describe("real Pi adapter: effective-policy preparation failures", () => {
         toolCallId: "req-e2e",
         input: { path: "/tmp/x", content: "y" },
       } as never);
-      expect(denied).toMatchObject({ block: true, reason: expect.stringContaining("Read-Only Safe Mode") });
+      expect(denied).toBeUndefined();
+      const notices: string[] = [];
+      await session.extensionRunner!.getCommand("hooks")!.handler("status", { ui: { notify: (text: string) => notices.push(text) } } as never);
+      expect(JSON.parse(notices[0])).toMatchObject({ activation: "inactive", configuration: { lastFailure: expect.stringContaining("ghost") } });
     });
   }, 30_000);
 });

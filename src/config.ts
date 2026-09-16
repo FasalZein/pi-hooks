@@ -26,7 +26,7 @@ const ProviderEntry = Type.Object({
 
 const GlobalConfigSchema = Type.Object({
   // schemaVersion 1 is accepted and migrated to 2; any other value is rejected
-  // with a precise error (Read-Only Safe Mode on invalid global config).
+  // with a precise error (Inactive Host on invalid global config).
   schemaVersion: Type.Union([Type.Literal(1), Type.Literal(2)]),
   modules: Type.Optional(Type.Array(ModuleEntry)),
   providers: Type.Optional(Type.Array(ProviderEntry)),
@@ -64,6 +64,7 @@ export async function loadGlobalConfig(path: string): Promise<GlobalConfig> {
   try {
     text = await readFile(path, "utf8");
   } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return migrate({ schemaVersion: 2 });
     throw new Error(`Cannot read trusted global configuration ${path}: ${message(error)}`);
   }
 
