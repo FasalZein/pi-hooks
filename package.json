@@ -27,10 +27,14 @@
   },
   "pi": {
     "extensions": [
-      "./src/preset.ts"
-    ]
+      "./src/preset.ts",
+      "./node_modules/@ian-pascoe/pi-lsp/src/index.ts"
+    ],
+    "skills": ["./node_modules/@ian-pascoe/pi-lsp/skills"]
   },
+  "bundledDependencies": ["@ian-pascoe/pi-lsp"],
   "dependencies": {
+    "@ian-pascoe/pi-lsp": "0.4.4",
     "jsonc-parser": "3.3.1",
     "typebox": "1.1.38"
   },
