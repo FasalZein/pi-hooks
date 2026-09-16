@@ -39,6 +39,11 @@
         }
       }
     },
+    "rendering": {
+      "description": "Render Hooks TUI without changing decisions. False selects plain status and Pi confirmation dialogs.",
+      "type": "boolean",
+      "default": true
+    },
     "audit": {
       "type": "object",
       "additionalProperties": false,

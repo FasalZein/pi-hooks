@@ -42,6 +42,7 @@ function fakePi() {
         commands.set(name, command);
       },
       registerTool() { registrations.push("tool"); },
+      registerEntryRenderer(name: string) { registrations.push(`renderer:${name}`); },
       getAllTools() { return []; },
       getActiveTools() { return []; },
     },
@@ -621,7 +622,7 @@ describe("configuration, activation, audit, and status", () => {
     });
     expect(status.phaseOrder.guard).toEqual(["one"]);
     expect(status.finalInterceptor.boundary).toContain("later Pi extension");
-    expect(pi.registrations).toEqual(["command:hooks"]);
+    expect(pi.registrations).toEqual(["renderer:pi-hooks-denial", "command:hooks"]);
   });
 });
 

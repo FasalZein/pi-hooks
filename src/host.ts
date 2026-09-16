@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { AuditLog } from "./audit.js";
 import { cloneDeep, frozenView, safeFrozenView } from "./isolate.js";
 import { loadGlobalConfig, type GlobalConfig, type ProviderConfigEntry } from "./config.js";
+import { confirmApproval } from "./hooks-ui.js";
 import { preparePolicy } from "./policy.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { resolveOrder } from "./order.js";
@@ -74,7 +75,7 @@ export async function createHookHost(options: CreateHookHostOptions = {}): Promi
     failure = message(error);
   }
 
-  const interaction = createInteractionBroker();
+  const interaction = createInteractionBroker(config?.rendering !== false && options.preset !== undefined);
   let activation: ProviderActivation | undefined;
   if (config) {
     activation = await activateProviders(options.providers ?? [], config, interaction);
@@ -128,7 +129,7 @@ interface InteractionBroker extends InteractionGrant {
  * context yet) the caller-supplied noUiOutcome returns immediately — nothing
  * ever waits on an absent operator.
  */
-function createInteractionBroker(): InteractionBroker {
+function createInteractionBroker(rendering: boolean): InteractionBroker {
   let current: DispatchContext | undefined;
   return {
     setContext(context) {
@@ -136,6 +137,7 @@ function createInteractionBroker(): InteractionBroker {
     },
     async confirm(request, options) {
       const ui = current?.hasUI ? current.ui : undefined;
+      if (rendering && ui?.custom) return (await confirmApproval(ui, request)) ? "approved" : "denied";
       if (!ui?.confirm) return options.noUiOutcome;
       return (await ui.confirm(request.title, request.message)) ? "approved" : "denied";
     },
@@ -332,6 +334,7 @@ class Host implements HookHost {
       phaseOrder: this.phaseOrder,
       activation: this.isInactive() ? "inactive" : "active",
       ...(this.preset ? { preset: this.preset } : {}),
+      rendering: this.config?.rendering !== false,
       audit,
       finalInterceptor: { available: false, boundary: FINAL_BOUNDARY },
       grantBoundary: { processToolCallGated: false, note: PROCESS_GRANT_NOTE },

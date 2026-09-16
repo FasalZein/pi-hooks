@@ -1,4 +1,4 @@
-import type { ContextEvent, InputEventResult, ToolResultEvent } from "@earendil-works/pi-coding-agent";
+import type { ContextEvent, ExtensionUIContext, InputEventResult, ToolResultEvent } from "@earendil-works/pi-coding-agent";
 import type { GrantKind } from "./grants.js";
 
 /** Pi's exact payload types, derived from the public SDK surface. */
@@ -55,6 +55,7 @@ export interface DispatchContext {
     setWidget?(key: string, lines: readonly string[] | undefined): void;
     /** Pi's ExtensionUIContext.confirm, used by the interaction grant broker. */
     confirm?(title: string, message: string): Promise<boolean>;
+    custom?: ExtensionUIContext["custom"];
   };
 }
 
@@ -246,6 +247,7 @@ export interface HostStatus {
   phaseOrder: Record<HookPhase, string[]>;
   activation: "active" | "inactive";
   preset?: string;
+  rendering: boolean;
   /** Audit persistence health lane: append/serialization failures only. */
   audit: {
     health: "healthy" | "degraded";

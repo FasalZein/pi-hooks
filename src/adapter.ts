@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { normalizeEvent } from "./events.js";
 import { createHookHost, type CreateHookHostOptions } from "./host.js";
 import type { DispatchContext } from "./types.js";
+import { denialPanel, showStatus } from "./hooks-ui.js";
 
 /**
  * The Pi seam (SLICE-0008): one binding per exposed event. Each binding
@@ -11,6 +12,8 @@ import type { DispatchContext } from "./types.js";
 export function createPiHooksExtension(options: CreateHookHostOptions = {}) {
   return async function piHooksExtension(pi: ExtensionAPI): Promise<void> {
     const host = await createHookHost(options);
+    pi.registerEntryRenderer<{ reason: string }>("pi-hooks-denial", (entry, _options, theme) =>
+      typeof entry.data?.reason === "string" ? denialPanel(entry.data.reason, theme) : undefined);
     host.bindPi({
       registerTool: (tool) => pi.registerTool(tool as never),
       registerCommand: (name, command) =>
@@ -41,7 +44,12 @@ export function createPiHooksExtension(options: CreateHookHostOptions = {}) {
       const result = await host.dispatch(normalized, ctx as DispatchContext);
       if (result.event !== "tool_call") return;
       if (result.mutated) replaceInput(event.input as Record<string, unknown>, result.input);
-      if (result.decision === "deny") return { block: true, reason: result.reason };
+      if (result.decision === "deny") {
+        if (ctx.hasUI && host.status().rendering) {
+          pi.appendEntry("pi-hooks-denial", { reason: result.reason ?? "Denied by a Hook Module" });
+        }
+        return { block: true, reason: result.reason };
+      }
     });
 
     pi.on("tool_result", async (event, ctx) => {
@@ -86,7 +94,7 @@ export function createPiHooksExtension(options: CreateHookHostOptions = {}) {
           ctx.ui.notify("Usage: /hooks status", "info");
           return;
         }
-        ctx.ui.notify(JSON.stringify(host.status()), "info");
+        await showStatus(host.status(), ctx);
       },
     });
   };

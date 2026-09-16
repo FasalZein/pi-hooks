@@ -82,6 +82,14 @@ Empty stdout means no effect. Otherwise stdout is one effect or an array of effe
 
 Recipes must declare permitted effects. Unsupported, undeclared, wrong-event, and malformed effects are refused and audited. `onFailure` defaults to `ignore`; `block` is valid only for `tool_call`. Runtime failures degrade Action Engine health. Invalid Recipe configuration disables the optional Action Engine but leaves policy active. Audit records redact free-form failure reasons; `/hooks status` carries the local diagnostic.
 
+### Hooks TUI
+
+`/hooks status` shows a scrollable panel in interactive Pi. The panel reports activation, health, Providers, grants, and phase order. Arrow keys scroll; Enter or Escape closes it.
+
+Approvals show the exact command, rule id, scope, and remedy. The only choices are Deny and Allow once. Deny is selected initially. A denial also creates a styled, model-invisible transcript entry beside Pi's unchanged tool error.
+
+Set `"rendering": false` in global `pi-hooks.jsonc` for JSON status, Pi's plain confirmation dialog, and plain denial output. This toggle never changes policy or audit outcomes. Reload Pi after configuration changes.
+
 ## Native events
 
 Hook Modules accept `input`, `tool_call`, `tool_result`, `context`, `agent_end`, `session_start`, `session_shutdown`, `session_before_compact`, and `session_compact`. Former Claude-style names are rejected with a native-name remedy. For example, replace `PreToolUse` with `tool_call`.

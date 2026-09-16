@@ -30,6 +30,7 @@ const GlobalConfigSchema = Type.Object({
   schemaVersion: Type.Union([Type.Literal(1), Type.Literal(2)]),
   modules: Type.Optional(Type.Array(ModuleEntry)),
   providers: Type.Optional(Type.Array(ProviderEntry)),
+  rendering: Type.Optional(Type.Boolean()),
   audit: Type.Optional(Type.Object({
     path: Type.Optional(Type.String({ minLength: 1 })),
     includeAllows: Type.Optional(Type.Boolean()),
@@ -56,6 +57,7 @@ export interface GlobalConfig {
   schemaVersion: 2;
   modules: ModuleConfigEntry[];
   providers: ProviderConfigEntry[];
+  rendering?: boolean;
   audit?: { path?: string; includeAllows?: boolean };
 }
 
@@ -84,6 +86,7 @@ interface RawGlobalConfig {
   schemaVersion: 1 | 2;
   modules?: ModuleConfigEntry[];
   providers?: ProviderConfigEntry[];
+  rendering?: boolean;
   audit?: { path?: string; includeAllows?: boolean };
 }
 
@@ -93,6 +96,7 @@ function migrate(raw: RawGlobalConfig): GlobalConfig {
     schemaVersion: 2,
     modules: raw.modules ?? [],
     providers: raw.providers ?? [],
+    ...(raw.rendering !== undefined ? { rendering: raw.rendering } : {}),
     ...(raw.audit ? { audit: raw.audit } : {}),
   };
 }
