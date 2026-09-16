@@ -28,6 +28,10 @@ Policy requires an explicit composition with the named `policyEngineProvider` ex
 
 Use `/hooks status` for activation, configuration health, runtime health, audit health, Providers and their grants, phase order, and the observed boundary.
 
+## Native events
+
+Hook Modules accept `input`, `tool_call`, `tool_result`, `context`, `agent_end`, `session_start`, `session_shutdown`, `session_before_compact`, and `session_compact`. Former Claude-style names are rejected with a native-name remedy. For example, replace `PreToolUse` with `tool_call`.
+
 ## Enforcement boundary
 
 The Host applies blocks and argument mutations through Pi's public `tool_call` event. Its `internal-final` phase re-evaluates input after all Host-owned transforms. This is not a process-wide final interceptor: a separately loaded later Pi extension can still mutate input after this Host returns.

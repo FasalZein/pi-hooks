@@ -1,5 +1,6 @@
 import type { GlobalConfig } from "./config.js";
 import { resolveOrder } from "./order.js";
+import { validateModuleEvents } from "./events.js";
 import type { HookModule, HookPhase } from "./types.js";
 
 /**
@@ -45,7 +46,14 @@ export function preparePolicy(available: readonly HookModule[], config: GlobalCo
       failures.push(`Configured optional module is unavailable: ${entry.id}`);
       continue;
     }
-    enabled.push(module);
+    try {
+      validateModuleEvents(module);
+      enabled.push(module);
+    } catch (error) {
+      const failure = `Module ${entry.id}: ${error instanceof Error ? error.message : String(error)}`;
+      if (entry.required !== false) return { ok: false, failure };
+      failures.push(failure);
+    }
   }
 
   try {

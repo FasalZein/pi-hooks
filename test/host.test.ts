@@ -625,16 +625,22 @@ describe("configuration, activation, audit, and status", () => {
   });
 });
 
-describe("normalized events and compatibility aliases", () => {
+describe("native events and rejected compatibility aliases", () => {
   it.each([
     ["input", "input"],
     ["tool_call", "tool_call"],
     ["tool_result", "tool_result"],
+    ["context", "context"],
     ["agent_end", "agent_end"],
     ["session_start", "session_start"],
     ["session_shutdown", "session_shutdown"],
     ["session_before_compact", "session_before_compact"],
     ["session_compact", "session_compact"],
+  ])("normalizes native %s to %s", (source, expected) => {
+    expect(normalizeEvent(source, { toolName: "bash", input: {} }).type).toBe(expected);
+  });
+
+  it.each([
     ["UserPromptSubmit", "input"],
     ["PreToolUse", "tool_call"],
     ["PostToolUse", "tool_result"],
@@ -644,8 +650,11 @@ describe("normalized events and compatibility aliases", () => {
     ["SessionEnd", "session_shutdown"],
     ["PreCompact", "session_before_compact"],
     ["PostCompact", "session_compact"],
-  ])("normalizes %s to %s", (source, expected) => {
-    expect(normalizeEvent(source, { toolName: "bash", toolInput: {}, isError: source === "PostToolUseFailure" }).type).toBe(expected);
+  ])("rejects %s with a remedy naming %s", async (source, expected) => {
+    expect(() => normalizeEvent(source, {})).toThrow(`Use native event ${expected}`);
+    const { configPath } = await fixture(validConfig(["legacy"]));
+    const host = await createHookHost({ configPath, modules: [{ id: "legacy", [source]: { observe() {} } }] });
+    expect(host.status()).toMatchObject({ activation: "inactive", configuration: { lastFailure: expect.stringContaining(`Use native event ${expected}`) } });
   });
 });
 

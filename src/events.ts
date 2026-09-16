@@ -1,7 +1,8 @@
 import { cloneDeep } from "./isolate.js";
-import type { NormalizedEvent } from "./types.js";
+import { EVENT_TYPES, type HookEventType, type HookModule, type NormalizedEvent } from "./types.js";
 
-const ALIASES: Record<string, NormalizedEvent["type"]> = {
+/** Rejection remedies only. No external name is normalized into a native event. */
+const NATIVE_REMEDIES: Record<string, HookEventType> = {
   UserPromptSubmit: "input",
   PreToolUse: "tool_call",
   PostToolUse: "tool_result",
@@ -13,23 +14,22 @@ const ALIASES: Record<string, NormalizedEvent["type"]> = {
   PostCompact: "session_compact",
 };
 
-const NATIVE = new Set<NormalizedEvent["type"]>([
-  "input",
-  "tool_call",
-  "tool_result",
-  "context",
-  "agent_end",
-  "session_start",
-  "session_shutdown",
-  "session_before_compact",
-  "session_compact",
-]);
+export function assertNativeEvent(value: string): asserts value is HookEventType {
+  if ((EVENT_TYPES as readonly string[]).includes(value)) return;
+  const remedy = NATIVE_REMEDIES[value];
+  throw new Error(`Unsupported Hook Host event: ${value}. ${remedy ? `Use native event ${remedy}` : `Use a native event: ${EVENT_TYPES.join(", ")}`}`);
+}
+
+export function validateModuleEvents(module: HookModule): void {
+  for (const key of Object.keys(module)) {
+    if (["id", "requires", "before", "after"].includes(key)) continue;
+    assertNativeEvent(key);
+  }
+}
 
 export function normalizeEvent(sourceType: string, payload: Record<string, unknown>): NormalizedEvent {
-  const type = ALIASES[sourceType] ?? (NATIVE.has(sourceType as NormalizedEvent["type"])
-    ? sourceType as NormalizedEvent["type"]
-    : undefined);
-  if (!type) throw new Error(`Unsupported Hook Host event: ${sourceType}`);
+  assertNativeEvent(sourceType);
+  const type = sourceType;
 
   const input = normalizeInput(type, payload);
 
@@ -39,7 +39,7 @@ export function normalizeEvent(sourceType: string, payload: Record<string, unkno
     toolName: stringValue(payload.toolName) ?? stringValue(payload.tool_name),
     toolCallId: stringValue(payload.toolCallId) ?? stringValue(payload.toolUseId) ?? stringValue(payload.tool_use_id),
     input,
-    isError: sourceType === "PostToolUseFailure" || payload.isError === true,
+    isError: payload.isError === true,
     payload,
   };
 }

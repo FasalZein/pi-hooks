@@ -98,6 +98,21 @@ describe("ADR-001 activation at the real Pi boundary", () => {
     });
   });
 
+  it("isolates an optional Module alias and a Provider alias before dispatch", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-hooks-event-validation-"));
+    try {
+      const configPath = join(dir, "pi-hooks.jsonc");
+      await writeFile(configPath, JSON.stringify({ schemaVersion: 2, modules: [{ id: "legacy", required: false }], providers: [{ id: "legacy-provider", required: false }] }));
+      const provider = defineProvider({ manifest: { id: "legacy-provider", version: "1", grants: ["events"] }, activate(f) {
+        f.events.registerModule({ id: "legacy-contribution", PreToolUse: { guard() {} } } as never);
+      } });
+      const host = await createHookHost({ configPath, modules: [{ id: "legacy", Stop: { observe() {} } } as never], providers: [provider] });
+      expect(host.status()).toMatchObject({ activation: "active", runtime: { health: "degraded", lastFailure: expect.stringContaining("agent_end") }, providers: [{ enabled: false, lastFailure: expect.stringContaining("tool_call") }] });
+      expect(Object.values(host.status().phaseOrder).flat()).toEqual([]);
+      expect(() => normalizeEvent("not-an-event", {})).toThrow("Use a native event");
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
   it("reports unreadable configuration separately from a missing file", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-hooks-unreadable-"));
     try {

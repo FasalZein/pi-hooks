@@ -3,6 +3,7 @@ import { Compile } from "typebox/compile";
 import { Value } from "typebox/value";
 import type { TSchema } from "typebox";
 import type { GlobalConfig, ProviderConfigEntry } from "./config.js";
+import { validateModuleEvents } from "./events.js";
 import {
   buildFacade,
   GRANT_KINDS,
@@ -243,6 +244,7 @@ function collectingWiring(prepared: PreparedProvider, activation: ProviderActiva
   return {
     events: {
       registerModule: (module) => {
+        validateModuleEvents(module);
         activation.modules.push(module);
         activation.requiredByModuleId.set(module.id, prepared.required);
         activation.providerByModuleId.set(module.id, prepared.id);
