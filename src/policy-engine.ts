@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { Type, type Static } from "typebox";
 import { defineProvider, type InteractionGrant } from "./grants.js";
 import type { GuardResult, HookInvocation } from "./types.js";
+import { matchesGlob } from "./glob.js";
 
 /**
  * Policy Engine core (SLICE-0011): a config-driven Capability Provider on the
@@ -19,6 +20,7 @@ const InputMatcher = Type.Object({
   equals: Type.Optional(Type.Unknown()),
   /** Substring match on a string value. */
   contains: Type.Optional(Type.String({ minLength: 1 })),
+  glob: Type.Optional(Type.String({ minLength: 1 })),
 }, { additionalProperties: false });
 
 const RuleMatch = Type.Object({
@@ -95,7 +97,7 @@ export const policyEngineProvider = defineProvider({
       id: "policy-engine",
       tool_call: {
         guard: (invocation) => decideGuard(rules, invocation, facade.interaction, approvals, approvalTtlMs),
-        internalFinal: (invocation) => validateFinalApproval(invocation, approvals),
+        internalFinal: (invocation) => validateFinalApproval(rules, invocation, facade.interaction, approvals, approvalTtlMs),
       },
     });
   },
@@ -121,8 +123,9 @@ async function decideGuard(
   interaction: InteractionGrant,
   approvals: Map<string, PendingApproval>,
   approvalTtlMs: number,
+  approvalRule?: PolicyRuleConfig,
 ): Promise<GuardResult | undefined> {
-  const winner = composeDecision(rules, invocation);
+  const winner = approvalRule ?? composeDecision(rules, invocation);
   if (!winner || winner.decision === "allow") return undefined;
   const toolName = invocation.event.toolName ?? "(unnamed)";
   if (winner.decision === "hard-deny") {
@@ -138,7 +141,7 @@ async function decideGuard(
     const outcome = await interaction.confirm(
       {
         title: "Policy Engine approval",
-        message: `Rule "${winner.id}" requires approval to run tool "${toolName}"`,
+        message: `Rule: ${winner.id}\nTool: ${toolName}\nCommand: ${typeof invocation.input.command === "string" ? invocation.input.command : canonicalJson(invocation.input)}\nScope: ${winner.scope}\nRemedy: ${winner.remedy}`,
       },
       { noUiOutcome: "denied" },
     );
@@ -172,19 +175,28 @@ async function decideGuard(
 /**
  * Two-phase approval, phase two: consume the toolCallId-bound token exactly
  * once and compare its SHA256 fingerprint with the Host-final observed input.
- * A transform mismatch or expiry denies without consulting the UI again.
+ * A transform mismatch requires fresh approval for the final input. Expiry denies.
  */
-function validateFinalApproval(
+async function validateFinalApproval(
+  rules: readonly PolicyRuleConfig[],
   invocation: HookInvocation,
+  interaction: InteractionGrant,
   approvals: Map<string, PendingApproval>,
-): GuardResult | undefined {
+  approvalTtlMs: number,
+): Promise<GuardResult | undefined> {
   const toolCallId = invocation.event.toolCallId;
-  if (toolCallId === undefined) return undefined;
-  const approval = approvals.get(toolCallId);
-  if (!approval) return undefined;
-  approvals.delete(toolCallId);
-
+  const approval = toolCallId === undefined ? undefined : approvals.get(toolCallId);
+  if (toolCallId !== undefined) approvals.delete(toolCallId);
+  const winner = composeDecision(rules, invocation);
   const toolName = invocation.event.toolName ?? "(unnamed)";
+  if (winner?.decision === "deny" || winner?.decision === "hard-deny") {
+    return { decision: "deny", reason: denialReason(winner, toolName) };
+  }
+  if (!approval) {
+    const result = await decideGuard(rules, invocation, interaction, approvals, approvalTtlMs);
+    if (toolCallId !== undefined) approvals.delete(toolCallId);
+    return result;
+  }
   if (Date.now() >= approval.expiresAt) {
     return {
       decision: "deny",
@@ -192,10 +204,10 @@ function validateFinalApproval(
     };
   }
   if (toolCallFingerprint(toolName, invocation.input) !== approval.fingerprint) {
-    return {
-      decision: "deny",
-      reason: denialReason(approval.rule, toolName, "Host-final input no longer matches the approved action"),
-    };
+    const rule = winner?.decision === "ask" ? winner : approval.rule;
+    const result = await decideGuard([], invocation, interaction, approvals, approvalTtlMs, rule);
+    if (toolCallId !== undefined) approvals.delete(toolCallId);
+    return result;
   }
   return undefined;
 }
@@ -246,6 +258,7 @@ function matches(match: Static<typeof RuleMatch>, invocation: HookInvocation): b
       const value = resolvePath(input, path);
       if (Object.hasOwn(matcher, "equals") && canonicalJson(value) !== canonicalJson(matcher.equals)) return false;
       if (matcher.contains !== undefined && (typeof value !== "string" || !value.includes(matcher.contains))) return false;
+      if (matcher.glob !== undefined && (typeof value !== "string" || !matchesGlob(matcher.glob, value))) return false;
     }
   }
   return true;

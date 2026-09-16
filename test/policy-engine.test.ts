@@ -483,7 +483,7 @@ describe("SLICE-0011 item 6: Host-final approval fingerprints", () => {
     });
   }, 30_000);
 
-  it("denies without re-asking when a transform changes the approved input before internalFinal", async () => {
+  it("requires fresh approval when a transform changes the approved input before internalFinal", async () => {
     const calls: Array<[string, string]> = [];
     const config = policyConfig(
       [{ id: "ask-bash", match: { tool: "bash" }, decision: "ask", scope: "shell", remedy: "approve the exact command" }],
@@ -492,10 +492,10 @@ describe("SLICE-0011 item 6: Host-final approval fingerprints", () => {
     await withPolicySession({ config, extensionSource: transformingPolicySource() }, async (session) => {
       await session.bindExtensions({ uiContext: confirmingUiContext(calls, true) as never });
       const result = await emitToolCall(session, "bash", { command: "echo hi", note: "approved" });
-      expect(result).toMatchObject({ block: true });
-      expect(result?.reason).toContain("ask-bash");
-      expect(result?.reason).toContain("ask");
-      expect(calls).toHaveLength(1);
+      expect(result).toBeUndefined();
+      expect(calls).toHaveLength(2);
+      expect(calls[0][1]).toContain("echo hi");
+      expect(calls[1][1]).toContain("Scope: shell");
     });
   }, 30_000);
 });

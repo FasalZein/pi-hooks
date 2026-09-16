@@ -11,6 +11,7 @@
   "files": [
     "src",
     "schema",
+    "examples",
     "README.md"
   ],
   "keywords": [
