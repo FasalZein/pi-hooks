@@ -2,6 +2,8 @@ import { createPiHooksExtension } from "./adapter.js";
 
 export { createPiHooksExtension } from "./adapter.js";
 export { piHooksPreset } from "./preset.js";
+export { actionEngineProvider, ActionEngineConfigSchema } from "./action-engine.js";
+export type { Recipe } from "./action-engine.js";
 export { normalizeEvent } from "./events.js";
 export { createHookHost } from "./host.js";
 export type { CreateHookHostOptions, HookHost, PiGrantBindings } from "./host.js";

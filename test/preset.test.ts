@@ -25,7 +25,7 @@ describe("path-installed Preset", () => {
       try {
         const notices: string[] = [];
         await session.extensionRunner!.getCommand("hooks")!.handler("status", { ui: { notify: (text: string) => notices.push(text) } } as never);
-        expect(JSON.parse(notices[0])).toMatchObject({ activation: "active", preset: "pi-hooks", providers: [expect.objectContaining({ id: "policy-engine", enabled: true })] });
+        expect(JSON.parse(notices[0])).toMatchObject({ activation: "active", preset: "pi-hooks", providers: [expect.objectContaining({ id: "policy-engine", enabled: true }), expect.objectContaining({ id: "action-engine", enabled: true })] });
         expect(await session.extensionRunner!.emitToolCall({ type: "tool_call", toolName: "bash", toolCallId: "default", input: { command: "echo allowed" } } as never)).toBeUndefined();
       } finally { session.dispose(); }
     } finally {

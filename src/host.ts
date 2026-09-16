@@ -314,11 +314,12 @@ class Host implements HookHost {
         health: this.runtimeFailure ? "degraded" : "healthy",
         ...(this.runtimeFailure ? { lastFailure: this.runtimeFailure } : {}),
       },
-      modules: configured.map((entry) => ({
-        id: entry.id,
-        enabled: enabledIds.has(entry.id),
-        required: entry.required !== false,
-      })),
+      modules: [
+        ...configured.map((entry) => ({ id: entry.id, enabled: enabledIds.has(entry.id), required: entry.required !== false })),
+        ...this.modules.filter((module) => this.providerByModuleId.has(module.id)).map((module) => ({
+          id: module.id, enabled: true, required: this.requiredById.get(module.id) !== false,
+        })),
+      ],
       providers: this.providers.map((provider) => ({
         id: provider.id,
         source: provider.source,
@@ -556,6 +557,14 @@ class Host implements HookHost {
           event: safeFrozenView(event),
           input: frozenView(currentInput),
           context,
+          reportFailure: async (reason: string) => {
+            const failure = `${module.id}: ${reason}`;
+            this.runtimeFailure = failure;
+            const owner = this.providerByModuleId.get(module.id);
+            if (owner) this.degradeProvider(owner, failure);
+            await this.writeDecision(module.id, event, context, phase, "module-failure", failure, currentInput);
+          },
+          addContext: (text: string) => { this.queuedContext.push(text); },
           ...(extras?.() ?? {}),
         } as I;
         const result = await handler(invocation);

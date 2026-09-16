@@ -50,6 +50,38 @@ Use `/hooks status` for activation, configuration health, runtime health, audit 
 
 `glob` matches the complete command, ignores case, and treats only `*` as a wildcard. It is not a shell parser or a sandbox. Approval applies once to the exact input. A Host transform requires fresh approval if that input changes. Without a UI, ask rules deny with a remedy.
 
+### Recipes
+
+The Preset includes an optional Action Engine. Configure its `recipes` array in the `action-engine` Provider entry:
+
+```jsonc
+{
+  "id": "action-engine",
+  "required": false,
+  "config": {
+    "recipes": [{
+      "id": "check-command",
+      "event": "tool_call",
+      "tool": "bash",
+      "commands": [{ "command": "node", "args": ["/trusted/check-command.js"] }],
+      "timeoutMs": 3000,
+      "onFailure": "ignore",
+      "effects": ["block", "add-context"]
+    }]
+  }
+}
+```
+
+Each command receives `{ "event", "sessionId", "payload", "input" }` as JSON on stdin. Commands run in order without a shell. Each Recipe must supply a positive `timeoutMs`; the example selects three seconds. Timeout and cancellation terminate the child's process group where supported. Child programs are trusted and have the same OS permissions as Pi.
+
+Empty stdout means no effect. Otherwise stdout is one effect or an array of effects:
+
+- `{ "type": "block", "reason": "..." }` denies a `tool_call`.
+- `{ "type": "add-context", "text": "..." }` queues text for the next model context.
+- `{ "type": "patch-result", "content": [{ "type": "text", "text": "..." }] }` replaces `tool_result` content.
+
+Recipes must declare permitted effects. Unsupported, undeclared, wrong-event, and malformed effects are refused and audited. `onFailure` defaults to `ignore`; `block` is valid only for `tool_call`. Runtime failures degrade Action Engine health. Invalid Recipe configuration disables the optional Action Engine but leaves policy active. Audit records redact free-form failure reasons; `/hooks status` carries the local diagnostic.
+
 ## Native events
 
 Hook Modules accept `input`, `tool_call`, `tool_result`, `context`, `agent_end`, `session_start`, `session_shutdown`, `session_before_compact`, and `session_compact`. Former Claude-style names are rejected with a native-name remedy. For example, replace `PreToolUse` with `tool_call`.

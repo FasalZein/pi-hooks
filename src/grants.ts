@@ -38,6 +38,7 @@ export interface CommandsGrant {
 /** process grant: spawn a Host-lifecycle-owned long-lived child process. */
 export interface ProcessGrant {
   spawn(spec: ProcessSpec): void;
+  run(spec: ProcessRunSpec): Promise<string>;
 }
 /** ui grant: status/widget surfaces. */
 export interface UiGrant {
@@ -69,6 +70,15 @@ export interface ProcessSpec {
   id: string;
   command: string;
   args?: readonly string[];
+}
+
+export interface ProcessRunSpec {
+  command: string;
+  args?: readonly string[];
+  cwd: string;
+  stdin: string;
+  timeoutMs: number;
+  signal?: AbortSignal;
 }
 
 export interface GrantApiMap {

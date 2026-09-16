@@ -43,6 +43,7 @@ export interface NormalizedEvent {
 export interface DispatchContext {
   cwd: string;
   hasUI: boolean;
+  signal?: AbortSignal;
   sessionManager?: {
     getSessionFile?(): string | undefined;
     getSessionId?(): string;
@@ -63,6 +64,9 @@ export interface HookInvocation {
   context: DispatchContext;
   /** Present only on tool_result: the current (chained) result view a patch applies to. */
   result?: Readonly<ToolResultPatch>;
+  /** Host-owned effects for Recipe execution, never raw Pi authority. */
+  reportFailure?(reason: string): Promise<void>;
+  addContext?(text: string): void;
 }
 
 export interface ObserveInvocation extends HookInvocation {

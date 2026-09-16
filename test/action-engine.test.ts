@@ -1,0 +1,154 @@
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { createAgentSession, DefaultResourceLoader, SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
+import { describe, expect, it } from "vitest";
+import { actionEngineProvider, createHookHost, normalizeEvent, type Recipe } from "../src/index.js";
+import { EVENT_TYPES } from "../src/types.js";
+import { runProcess } from "../src/process-runner.js";
+
+const entry = fileURLToPath(new URL("../src/preset.ts", import.meta.url));
+const command = (script: string) => ({ command: process.execPath, args: ["-e", script] });
+const recipe = (id: string, event: string, script: string, extra: Partial<Recipe> = {}): Recipe => ({ id, event, commands: [command(script)], timeoutMs: 3000, ...extra });
+
+async function withRecipes(recipes: unknown[], run: (session: AgentSession, dir: string) => Promise<void>, policyRules: unknown[] = []) {
+  const dir = await mkdtemp(join(tmpdir(), "pi-hooks-recipes-"));
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = dir;
+  try {
+    await writeFile(join(dir, "pi-hooks.jsonc"), JSON.stringify({ schemaVersion: 2, audit: { path: join(dir, "audit.jsonl"), includeAllows: true }, providers: [
+      { id: "action-engine", required: false, config: { recipes } }, { id: "policy-engine", config: { rules: policyRules } },
+    ] }));
+    const loader = new DefaultResourceLoader({ cwd: dir, agentDir: dir, additionalExtensionPaths: [entry], noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true });
+    await loader.reload();
+    expect(loader.getExtensions().errors).toEqual([]);
+    const { session } = await createAgentSession({ cwd: dir, resourceLoader: loader, sessionManager: SessionManager.inMemory() });
+    try { await run(session, dir); } finally { session.dispose(); }
+  } finally {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+async function status(session: AgentSession) {
+  const notices: string[] = [];
+  await session.extensionRunner!.getCommand("hooks")!.handler("status", { ui: { notify: (text: string) => notices.push(text) } } as never);
+  return JSON.parse(notices[0]);
+}
+
+const call = { type: "tool_call", toolName: "bash", toolCallId: "recipe-call", input: { command: "echo ok" } } as const;
+
+describe("Action Engine via the real Pi loader", () => {
+  it("runs each native event with a session-bound Event envelope and literal argv in order", async () => {
+    const literal = "$(touch not-created); * && echo nope";
+    const recipes = EVENT_TYPES.map((event) => ({ ...recipe(event, event, ""), commands: [
+      { command: process.execPath, args: ["-e", "let s='';process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>require('fs').appendFileSync('events.jsonl',JSON.stringify({envelope:JSON.parse(s),arg:process.argv[1]})+'\\n'))", literal] },
+      command("require('fs').appendFileSync('order.txt','second\\n')"),
+    ] }));
+    await withRecipes(recipes, async (session, dir) => {
+      const runner = session.extensionRunner!;
+      await session.bindExtensions({});
+      await runner.emitInput("hello", undefined, "interactive");
+      await runner.emitToolCall(call);
+      await runner.emitToolResult({ type: "tool_result", toolName: "bash", toolCallId: "result", input: {}, content: [], details: undefined, isError: false });
+      await runner.emitContext([]);
+      await runner.emit({ type: "agent_end", messages: [] });
+      await runner.emit({ type: "session_before_compact" } as never);
+      await runner.emit({ type: "session_compact" } as never);
+      await runner.emit({ type: "session_shutdown", reason: "quit" });
+      const rows = (await readFile(join(dir, "events.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+      expect(rows.map((row) => row.envelope.event).sort()).toEqual([...EVENT_TYPES].sort());
+      for (const row of rows) {
+        expect(row.envelope.sessionId).toBe(session.sessionManager.getSessionId());
+        expect(row.envelope.payload.type).toBe(row.envelope.event);
+        expect(row.arg).toBe(literal);
+      }
+      expect((await readFile(join(dir, "order.txt"), "utf8")).trim().split("\n")).toHaveLength(9);
+      await expect(readFile(join(dir, "not-created"))).rejects.toMatchObject({ code: "ENOENT" });
+      expect((await status(session)).modules.map((module: { id: string }) => module.id)).toContain("recipe:input");
+    });
+  });
+
+  it.each(["ignore", "block"] as const)("handles a timeout with onFailure %s", async (onFailure) => {
+    await withRecipes([recipe("slow", "tool_call", "setInterval(()=>{},1000)", { timeoutMs: 20, onFailure })], async (session, dir) => {
+      const result = await session.extensionRunner!.emitToolCall(call);
+      if (onFailure === "block") expect(result).toMatchObject({ block: true, reason: expect.stringContaining("Recipe slow") });
+      else expect(result).toBeUndefined();
+      expect((await status(session)).runtime).toMatchObject({ health: "degraded", lastFailure: expect.stringContaining("timed out") });
+      expect(await readFile(join(dir, "audit.jsonl"), "utf8")).toContain('"provider":"action-engine"');
+    });
+  });
+
+  it.each([
+    recipe("wrong-failure", "input", "", { onFailure: "block" }),
+    recipe("legacy", "PreToolUse", ""),
+    { ...recipe("bad-timeout", "input", ""), timeoutMs: 0 },
+  ])("isolates invalid Recipe $id without disabling policy", async (invalid) => {
+    await withRecipes([invalid], async (session) => {
+      expect(await status(session)).toMatchObject({ activation: "active", providers: [expect.objectContaining({ id: "policy-engine", enabled: true }), expect.objectContaining({ id: "action-engine", enabled: false, health: "degraded" })] });
+      expect(await session.extensionRunner!.emitToolCall(call)).toBeUndefined();
+    });
+  });
+
+  it("applies declared block, context, and result effects through Pi", async () => {
+    await withRecipes([
+      recipe("blocker", "tool_call", `console.log(JSON.stringify({type:'block',reason:'ask the owner'}))`, { tool: "bash", effects: ["block"] }),
+      recipe("context", "input", `console.log(JSON.stringify({type:'add-context',text:'Recipe context'}))`, { effects: ["add-context"] }),
+      recipe("patch", "tool_result", `console.log(JSON.stringify({type:'patch-result',content:[{type:'text',text:'patched by Recipe'}]}))`, { effects: ["patch-result"] }),
+    ], async (session, dir) => {
+      const runner = session.extensionRunner!;
+      expect(await runner.emitToolCall(call)).toMatchObject({ block: true, reason: "Recipe blocker: ask the owner" });
+      await runner.emitInput("hello", undefined, "interactive");
+      expect(JSON.stringify(await runner.emitContext([]))).toContain("Recipe context");
+      expect(await runner.emitContext([])).toEqual([]);
+      const patch = await runner.emitToolResult({ type: "tool_result", toolName: "bash", toolCallId: "result", input: {}, content: [{ type: "text", text: "original" }], details: undefined, isError: false });
+      expect(patch?.content).toEqual([{ type: "text", text: "patched by Recipe" }]);
+      expect(await readFile(join(dir, "audit.jsonl"), "utf8")).toContain('"moduleId":"recipe:blocker"');
+    });
+  });
+
+  it.each([
+    ['{"type":"unknown"}', [], "unsupported"],
+    ['{"type":"block","reason":"no"}', [], "refused block"],
+    ['{"type":"patch-result","content":[]}', ["patch-result"], "refused patch-result"],
+    ["not json", [], "malformed stdout"],
+  ])("refuses invalid stdout %s without blocking", async (output, effects, reason) => {
+    await withRecipes([recipe("refusal", "tool_call", `console.log(${JSON.stringify(output)})`, { effects: effects as Recipe["effects"] })], async (session, dir) => {
+      expect(await session.extensionRunner!.emitToolCall(call)).toBeUndefined();
+      expect((await status(session)).runtime.lastFailure).toContain(reason);
+      const records = (await readFile(join(dir, "audit.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+      expect(records).toContainEqual(expect.objectContaining({ moduleId: "recipe:refusal", provider: "action-engine", decision: "module-failure", reason: "[REDACTED]" }));
+    });
+  });
+
+  it("short-circuits a Recipe block behind a Policy Engine denial", async () => {
+    await withRecipes([recipe("must-not-run", "tool_call", "require('fs').writeFileSync('ran','yes')")], async (session, dir) => {
+      expect(await session.extensionRunner!.emitToolCall(call)).toMatchObject({ block: true, reason: expect.stringContaining("policy-deny") });
+      await expect(readFile(join(dir, "ran"))).rejects.toMatchObject({ code: "ENOENT" });
+      const audit = (await readFile(join(dir, "audit.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+      expect(audit.filter((record) => record.decision === "deny")).toHaveLength(1);
+    }, [{ id: "policy-deny", match: { tool: "bash" }, decision: "deny", scope: "shell", remedy: "read only" }]);
+  });
+
+  it("continues fixed commands after ignored failure and skips unmatched tools", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-hooks-recipe-command-"));
+    try {
+      const configPath = join(dir, "pi-hooks.jsonc");
+      await writeFile(configPath, JSON.stringify({ schemaVersion: 2, providers: [{ id: "action-engine", config: { recipes: [{ ...recipe("order", "tool_call", "", { tool: "bash" }), commands: [command("process.exit(2)"), command("require('fs').writeFileSync('continued','yes')")] }] } }] }));
+      const host = await createHookHost({ configPath, providers: [actionEngineProvider] });
+      await host.dispatch(normalizeEvent("tool_call", { toolName: "read", input: {} }), { cwd: dir, hasUI: false });
+      await expect(readFile(join(dir, "continued"))).rejects.toMatchObject({ code: "ENOENT" });
+      await host.dispatch(normalizeEvent("tool_call", call), { cwd: dir, hasUI: false });
+      expect(await readFile(join(dir, "continued"), "utf8")).toBe("yes");
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe("Recipe child lifecycle", () => {
+  it("reports spawn errors and cancellation", async () => {
+    const spec = { command: "no-such-hook-command", cwd: process.cwd(), stdin: "{}", timeoutMs: 3000 };
+    await expect(runProcess(spec)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(runProcess({ ...spec, ...command("setInterval(()=>{},1000)"), signal: AbortSignal.abort() })).rejects.toThrow("aborted");
+  });
+});

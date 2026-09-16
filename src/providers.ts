@@ -4,6 +4,7 @@ import { Value } from "typebox/value";
 import type { TSchema } from "typebox";
 import type { GlobalConfig, ProviderConfigEntry } from "./config.js";
 import { validateModuleEvents } from "./events.js";
+import { runProcess } from "./process-runner.js";
 import {
   buildFacade,
   GRANT_KINDS,
@@ -252,7 +253,7 @@ function collectingWiring(prepared: PreparedProvider, activation: ProviderActiva
     },
     tools: { registerTool: (tool) => activation.tools.push({ providerId, tool }) },
     commands: { registerCommand: (name, command) => activation.commands.push({ providerId, name, command }) },
-    process: { spawn: (spec) => activation.processes.push({ providerId, spec }) },
+    process: { spawn: (spec) => activation.processes.push({ providerId, spec }), run: runProcess },
     ui: {
       setStatus: (key, text) => activation.uiOps.push({ providerId, kind: "status", key, text }),
       setWidget: (key, lines) => activation.uiOps.push({ providerId, kind: "widget", key, lines }),
