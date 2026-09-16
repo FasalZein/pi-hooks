@@ -1,6 +1,7 @@
 import { createPiHooksExtension } from "./adapter.js";
 
 export { createPiHooksExtension } from "./adapter.js";
+export { piHooksPreset } from "./preset.js";
 export { normalizeEvent } from "./events.js";
 export { createHookHost } from "./host.js";
 export type { CreateHookHostOptions, HookHost, PiGrantBindings } from "./host.js";

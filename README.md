@@ -6,6 +6,16 @@ An extension-only Hook Host and capability platform for Pi 0.85.1. It runs trust
 
 and loads trusted **Capability Providers**, each declaring exactly the grants it needs (`events`, `tools`, `commands`, `process`, `ui`, `interaction`). The Host hands each provider only its declared, typed API subset.
 
+## Install
+
+```sh
+pi install /absolute/path/to/pi-hooks
+```
+
+The package manifest loads the named `piHooksPreset`, which composes the Host and Policy Engine. The Preset supplies an empty rules list. Configuration entries override Preset defaults by Provider id. Use `/hooks status` to inspect the composition.
+
+Code imports of the package root receive the Bare Host default instead. The Preset is also available as a named export or through `@tothemoon/pi-hooks/preset`.
+
 ## Configuration
 
 Create trusted global JSONC configuration at `~/.pi/agent/pi-hooks.jsonc` (or `$PI_CODING_AGENT_DIR/pi-hooks.jsonc`):

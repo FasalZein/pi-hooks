@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "description": "Extension-only deterministic Hook Host for Pi 0.85.1.",
   "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./preset": "./src/preset.ts"
+  },
   "license": "MIT",
   "files": [
     "src",
@@ -23,7 +27,7 @@
   },
   "pi": {
     "extensions": [
-      "./src/index.ts"
+      "./src/preset.ts"
     ]
   },
   "dependencies": {

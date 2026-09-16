@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { AuditLog } from "./audit.js";
 import { cloneDeep, frozenView, safeFrozenView } from "./isolate.js";
-import { loadGlobalConfig, type GlobalConfig } from "./config.js";
+import { loadGlobalConfig, type GlobalConfig, type ProviderConfigEntry } from "./config.js";
 import { preparePolicy } from "./policy.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { resolveOrder } from "./order.js";
@@ -36,6 +36,9 @@ const PROCESS_GRANT_NOTE = "process-grant child processes run with the Pi proces
 
 export interface CreateHookHostOptions {
   configPath?: string;
+  /** Explicit composition defaults; user entries override them by id. */
+  providerDefaults?: readonly ProviderConfigEntry[];
+  preset?: string;
   modules?: readonly HookModule[];
   providers?: readonly AnyCapabilityProvider[];
 }
@@ -65,6 +68,8 @@ export async function createHookHost(options: CreateHookHostOptions = {}): Promi
 
   try {
     config = await loadGlobalConfig(configPath);
+    const configured = new Set(config.providers.map((entry) => entry.id));
+    config.providers = [...(options.providerDefaults ?? []).filter((entry) => !configured.has(entry.id)), ...config.providers];
   } catch (error) {
     failure = message(error);
   }
@@ -101,7 +106,7 @@ export async function createHookHost(options: CreateHookHostOptions = {}): Promi
     modules = [];
     phaseOrder = emptyPhaseOrder();
   }
-  const host = new Host(configPath, config, modules, phaseOrder, required, audit, failure, activation, interaction, activationFailure, preparationFailures);
+  const host = new Host(configPath, config, modules, phaseOrder, required, audit, failure, activation, interaction, activationFailure, preparationFailures, options.preset);
   if (activationFailure) await host.recordInactive(activationFailure);
   return host;
 }
@@ -164,6 +169,7 @@ class Host implements HookHost {
     private readonly interaction: InteractionBroker,
     private readonly activationFailure: string | undefined,
     preparationFailures: string[],
+    private readonly preset?: string,
   ) {
     this.configFailure = failure;
     this.providers = activation?.providers ?? [];
@@ -324,6 +330,7 @@ class Host implements HookHost {
       })),
       phaseOrder: this.phaseOrder,
       activation: this.isInactive() ? "inactive" : "active",
+      ...(this.preset ? { preset: this.preset } : {}),
       audit,
       finalInterceptor: { available: false, boundary: FINAL_BOUNDARY },
       grantBoundary: { processToolCallGated: false, note: PROCESS_GRANT_NOTE },

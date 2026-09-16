@@ -241,6 +241,7 @@ export interface HostStatus {
   }>;
   phaseOrder: Record<HookPhase, string[]>;
   activation: "active" | "inactive";
+  preset?: string;
   /** Audit persistence health lane: append/serialization failures only. */
   audit: {
     health: "healthy" | "degraded";
