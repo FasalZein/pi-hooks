@@ -239,8 +239,29 @@ function validateProviderConfig(schema: TSchema | undefined, config: unknown): s
   if (!schema) return undefined;
   const check = Compile(schema);
   if (check.Check(config)) return undefined;
-  const errors = [...Value.Errors(schema, config)].map((error) => `${error.instancePath || "/"}: ${error.message}`);
+  const errors = [...Value.Errors(schema, config)].map((error) => {
+    const path = error.instancePath || "/";
+    const id = namedEntryAtPath(config, path);
+    return `${id ? `entry ${id} ` : ""}${path}: ${error.message}`;
+  });
   return errors.join("; ") || "does not match provider config schema";
+}
+
+function namedEntryAtPath(config: unknown, path: string): string | undefined {
+  let current = config;
+  let id: string | undefined;
+  for (const part of path.split("/").slice(1)) {
+    if (current && typeof current === "object" && typeof (current as { id?: unknown }).id === "string") {
+      id = (current as { id: string }).id;
+    }
+    if (!current || typeof current !== "object") break;
+    const key = part.replaceAll("~1", "/").replaceAll("~0", "~");
+    current = (current as Record<string, unknown>)[key];
+  }
+  if (current && typeof current === "object" && typeof (current as { id?: unknown }).id === "string") {
+    id = (current as { id: string }).id;
+  }
+  return id;
 }
 
 function collectingWiring(prepared: PreparedProvider, activation: ProviderActivation, interaction: InteractionGrant, runtime: { active: boolean }): GrantWiring {

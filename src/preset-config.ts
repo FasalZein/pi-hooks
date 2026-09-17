@@ -3,9 +3,17 @@ import type { GlobalConfig, NamedOverride, ProviderConfigEntry } from './config.
 import { resolveNamedEntries } from './named-entries.js';
 
 export function resolvePresetConfig(config: GlobalConfig): GlobalConfig {
+  let recipes: NamedOverride[];
+  try {
+    recipes = resolveNamedEntries([], config.recipes ?? []);
+  } catch {
+    // Keep duplicate top-level Recipes inside the optional Action Engine boundary.
+    // Its activation names the duplicate and isolates only that Provider.
+    recipes = [...(config.recipes ?? [])];
+  }
   const defaults: ProviderConfigEntry[] = [
     { id: 'policy-engine', config: { rules: resolveNamedEntries(defaultRules as NamedOverride[], config.rules ?? []) } },
-    { id: 'action-engine', required: false, config: { recipes: resolveNamedEntries([], config.recipes ?? []) } },
+    { id: 'action-engine', required: false, config: { recipes } },
   ];
   const byId = new Map(defaults.map((entry) => [entry.id, entry]));
   const seen = new Set<string>();

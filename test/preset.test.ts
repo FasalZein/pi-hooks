@@ -6,6 +6,37 @@ import { createAgentSession, DefaultResourceLoader, SessionManager } from "@eare
 import { describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
+const recipe = (id: string, marker: string) => ({
+  id,
+  event: "tool_call",
+  tool: "bash",
+  commands: [{ command: process.execPath, args: ["-e", `require('fs').appendFileSync(${JSON.stringify(marker)},'ran\\n')`] }],
+  timeoutMs: 3000,
+});
+
+async function withInstalledPreset(config: string, run: (session: Awaited<ReturnType<typeof createAgentSession>>["session"], dir: string) => Promise<void>) {
+  const dir = await mkdtemp(join(tmpdir(), "pi-hooks-recipe-preset-"));
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = dir;
+  try {
+    await writeFile(join(dir, "pi-hooks.jsonc"), config.replaceAll("__DIR__", dir));
+    const loader = new DefaultResourceLoader({ cwd: dir, agentDir: dir, noExtensions: true, additionalExtensionPaths: [root], noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true });
+    await loader.reload();
+    expect(loader.getExtensions().errors).toEqual([]);
+    const { session } = await createAgentSession({ cwd: dir, resourceLoader: loader, sessionManager: SessionManager.inMemory() });
+    try { await run(session, dir); } finally { session.dispose(); }
+  } finally {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+async function hooksStatus(session: Awaited<ReturnType<typeof createAgentSession>>["session"]) {
+  const notices: string[] = [];
+  await session.extensionRunner!.getCommand("hooks")!.handler("status", { ui: { notify: (text: string) => notices.push(text) } } as never);
+  return JSON.parse(notices[0]);
+}
 
 describe("path-installed Preset", () => {
   it("loads both policy and LSP from an explicit helper allowlist in an isolated profile", async () => {
@@ -70,6 +101,73 @@ describe("path-installed Preset", () => {
       else process.env.PI_CODING_AGENT_DIR = previous;
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  it.each([
+    ["duplicate", [recipe("duplicate", "duplicate.txt"), recipe("duplicate", "duplicate.txt")]],
+    ["broken", [{ ...recipe("broken", "broken.txt"), timeoutMs: 0 }]],
+  ])("isolates %s top-level Recipe configuration with a named diagnostic", async (id, recipes) => {
+    await withInstalledPreset(JSON.stringify({
+      schemaVersion: 2,
+      rendering: false,
+      audit: { path: "__DIR__/audit.jsonl" },
+      recipes,
+      rules: [{ id: "healthy-policy", match: { tool: "bash" }, decision: "deny", scope: "test", remedy: "use another tool" }],
+    }), async (session, dir) => {
+      const status = await hooksStatus(session);
+      expect(status).toMatchObject({
+        activation: "active",
+        configuration: { health: "valid" },
+        runtime: { health: "degraded", lastFailure: expect.stringContaining(id) },
+        providers: [
+          expect.objectContaining({ id: "policy-engine", enabled: true, health: "healthy" }),
+          expect.objectContaining({ id: "action-engine", enabled: false, health: "degraded", lastFailure: expect.stringContaining(id) }),
+        ],
+      });
+      expect(await session.extensionRunner!.emitToolCall({ type: "tool_call", toolName: "bash", toolCallId: id, input: { command: "echo protected" } })).toMatchObject({ block: true, reason: expect.stringContaining("healthy-policy") });
+      const audit = await readFile(join(dir, "audit.jsonl"), "utf8");
+      expect(audit).toContain('"provider":"action-engine"');
+      expect(audit).toContain('"decision":"module-failure"');
+      expect(audit).not.toContain('"decision":"inactive"');
+    });
+  });
+
+  it("adds and disables top-level named Recipes through the installed Preset", async () => {
+    await withInstalledPreset(JSON.stringify({
+      schemaVersion: 2,
+      recipes: [recipe("active", "active.txt"), { ...recipe("disabled", "disabled.txt"), enabled: false }],
+    }), async (session, dir) => {
+      await session.extensionRunner!.emitToolCall({ type: "tool_call", toolName: "bash", toolCallId: "named", input: { command: "echo ok" } });
+      expect(await readFile(join(dir, "active.txt"), "utf8")).toBe("ran\n");
+      await expect(readFile(join(dir, "disabled.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      expect((await hooksStatus(session)).modules.map((module: { id: string }) => module.id)).toContain("recipe:active");
+      expect((await hooksStatus(session)).modules.map((module: { id: string }) => module.id)).not.toContain("recipe:disabled");
+    });
+  });
+
+  it("treats explicit Action Engine config as a whole-Provider replacement", async () => {
+    await withInstalledPreset(JSON.stringify({
+      schemaVersion: 2,
+      recipes: [recipe("replace-me", "top-level.txt")],
+      providers: [{ id: "action-engine", required: false, config: { recipes: [recipe("replace-me", "explicit.txt")] } }],
+    }), async (session, dir) => {
+      await session.extensionRunner!.emitToolCall({ type: "tool_call", toolName: "bash", toolCallId: "mixed", input: { command: "echo ok" } });
+      await expect(readFile(join(dir, "top-level.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await readFile(join(dir, "explicit.txt"), "utf8")).toBe("ran\n");
+      expect((await hooksStatus(session)).modules.map((module: { id: string }) => module.id)).toContain("recipe:replace-me");
+    });
+  });
+
+  it("keeps malformed whole configuration inactive without Preset fallback policy", async () => {
+    await withInstalledPreset('{ "schemaVersion": 2, "recipes": [', async (session) => {
+      expect(await hooksStatus(session)).toMatchObject({
+        activation: "inactive",
+        configuration: { health: "invalid", lastFailure: expect.stringContaining("Invalid JSONC") },
+        runtime: { health: "healthy" },
+        providers: [],
+      });
+      expect(await session.extensionRunner!.emitToolCall({ type: "tool_call", toolName: "bash", toolCallId: "inactive", input: { command: "rm file" } })).toBeUndefined();
+    });
   });
 
   it("loads the manifest Preset with default policy and keeps the library default bare", async () => {

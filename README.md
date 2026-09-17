@@ -60,23 +60,34 @@ This focused normalization is not a shell parser or a sandbox. It does not inspe
 
 ### Recipes
 
-The Preset includes an optional Action Engine. Configure its `recipes` array in the `action-engine` Provider entry:
+The Preset includes an optional Action Engine. Configure named Recipes through the top-level `recipes` array. A matching Preset Recipe id overrides that complete entry. Set `enabled: false` to remove an entry.
 
 ```jsonc
 {
-  "id": "action-engine",
-  "required": false,
-  "config": {
-    "recipes": [{
-      "id": "check-command",
-      "event": "tool_call",
-      "tool": "bash",
-      "commands": [{ "command": "node", "args": ["/trusted/check-command.js"] }],
-      "timeoutMs": 3000,
-      "onFailure": "ignore",
-      "effects": ["block", "add-context"]
-    }]
-  }
+  "schemaVersion": 2,
+  "recipes": [{
+    "id": "check-command",
+    "event": "tool_call",
+    "tool": "bash",
+    "commands": [{ "command": "node", "args": ["/trusted/check-command.js"] }],
+    "timeoutMs": 3000,
+    "onFailure": "ignore",
+    "effects": ["block", "add-context"]
+  }]
+}
+```
+
+Library composers can configure the Action Engine explicitly through `providers`. This form replaces the complete Preset-composed Provider entry. It does not merge with top-level `recipes`, so every top-level Recipe disappears when this override is present.
+
+```jsonc
+{
+  "schemaVersion": 2,
+  "recipes": [{ "id": "not-used", "enabled": false }],
+  "providers": [{
+    "id": "action-engine",
+    "required": false,
+    "config": { "recipes": [] }
+  }]
 }
 ```
 
