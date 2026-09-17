@@ -260,8 +260,8 @@ describe("Recipe child lifecycle", () => {
     await expect(runProcess({ ...spec, ...command("setInterval(()=>{},1000)"), signal: AbortSignal.abort() })).rejects.toThrow("aborted");
   });
 
-  it.runIf(process.platform !== "win32").each(["ignore", "block"] as const)(
-    "aborts an active Pi turn Recipe process group with onFailure %s",
+  it.each(["ignore", "block"] as const)(
+    "aborts an active Pi turn Recipe child with onFailure %s",
     async (onFailure) => {
       const timeoutMs = 5000;
       await withRecipes([
@@ -272,8 +272,10 @@ describe("Recipe child lifecycle", () => {
         try {
           pids = await readJsonWhenReady(join(dir, "active-process.json"), timeoutMs);
           expect(session.isIdle).toBe(false);
-          expect(await processGroupId(pids.leader)).toBe(pids.leader);
-          expect(await processGroupId(pids.descendant)).toBe(pids.leader);
+          if (process.platform !== "win32") {
+            expect(await processGroupId(pids.leader)).toBe(pids.leader);
+            expect(await processGroupId(pids.descendant)).toBe(pids.leader);
+          }
           expect(isProcessAlive(pids.leader)).toBe(true);
           expect(isProcessAlive(pids.descendant)).toBe(true);
 
@@ -281,9 +283,11 @@ describe("Recipe child lifecycle", () => {
           await run;
 
           await waitForProcessExit(pids.leader, timeoutMs);
-          await waitForProcessExit(pids.descendant, timeoutMs);
           expect(isProcessAlive(pids.leader)).toBe(false);
-          expect(isProcessAlive(pids.descendant)).toBe(false);
+          if (process.platform !== "win32") {
+            await waitForProcessExit(pids.descendant, timeoutMs);
+            expect(isProcessAlive(pids.descendant)).toBe(false);
+          }
 
           const currentStatus = await status(session);
           expect(currentStatus.runtime).toMatchObject({
@@ -313,7 +317,7 @@ describe("Recipe child lifecycle", () => {
         } finally {
           if (!session.isIdle) await session.abort();
           await run.catch(() => undefined);
-          if (pids) killProcessGroup(pids.leader);
+          if (pids) cleanupProcesses(pids);
         }
       });
     },
@@ -400,6 +404,11 @@ async function waitForProcessExit(pid: number, timeoutMs: number): Promise<void>
   if (isProcessAlive(pid)) throw new Error(`process ${pid} remained alive after ${timeoutMs}ms`);
 }
 
-function killProcessGroup(leader: number): void {
-  try { process.kill(-leader, "SIGKILL"); } catch { /* The group is already gone. */ }
+function cleanupProcesses({ leader, descendant }: { leader: number; descendant: number }): void {
+  if (process.platform !== "win32") {
+    try { process.kill(-leader, "SIGKILL"); } catch { /* The group is already gone. */ }
+  }
+  for (const pid of [descendant, leader]) {
+    try { process.kill(pid, "SIGKILL"); } catch { /* The process is already gone. */ }
+  }
 }
