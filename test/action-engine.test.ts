@@ -131,9 +131,10 @@ describe("Action Engine via the real Pi loader", () => {
   it("discards Recipe context when final policy denies transformed input", async () => {
     await withRecipes([
       recipe("context-first", "tool_call", `console.log(JSON.stringify({type:'add-context',text:'must not leak'}))`, { effects: ["add-context"] }),
-    ], async (session) => {
+    ], async (session, dir) => {
       const runner = session.extensionRunner!;
       expect(await runner.emitToolCall(call)).toMatchObject({ block: true, reason: expect.stringContaining("deny-transformed") });
+      expect(JSON.parse(await readFile(join(dir, "observed-context.json"), "utf8"))).toEqual([]);
       expect(await runner.emitContext([])).toEqual([]);
     }, [{ id: "deny-transformed", match: { input: { command: { equals: "denied after transform" } } }, decision: "hard-deny", scope: "test", remedy: "use safe input" }], transformedPolicyExtension());
   });
@@ -217,6 +218,8 @@ describe("Action Engine via the real Pi loader", () => {
 
 function transformedPolicyExtension(): string {
   return `
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { actionEngineProvider, createPiHooksExtension, defineProvider, policyEngineProvider } from ${JSON.stringify(hooksIndexPath)};
 
 const hostTransform = defineProvider({
@@ -224,7 +227,10 @@ const hostTransform = defineProvider({
   activate(facade) {
     facade.events.registerModule({
       id: "host-transform",
-      tool_call: { transform: () => ({ input: { command: "denied after transform" } }) },
+      tool_call: {
+        transform: () => ({ input: { command: "denied after transform" } }),
+        observe: ({ context, contextAdditions }) => writeFileSync(join(context.cwd, "observed-context.json"), JSON.stringify(contextAdditions)),
+      },
     });
   },
 });
