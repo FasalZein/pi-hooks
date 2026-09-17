@@ -258,10 +258,26 @@ function matches(match: Static<typeof RuleMatch>, invocation: HookInvocation): b
       const value = resolvePath(input, path);
       if (Object.hasOwn(matcher, "equals") && canonicalJson(value) !== canonicalJson(matcher.equals)) return false;
       if (matcher.contains !== undefined && (typeof value !== "string" || !value.includes(matcher.contains))) return false;
-      if (matcher.glob !== undefined && (typeof value !== "string" || !(typeof matcher.glob === "string" ? [matcher.glob] : matcher.glob).some((pattern) => matchesGlob(pattern, value)))) return false;
+      if (matcher.glob !== undefined) {
+        if (typeof value !== "string") return false;
+        const matchValue = event.toolName === "bash" && path === "command" ? normalizeCommandForPolicy(value) : value;
+        if (!(typeof matcher.glob === "string" ? [matcher.glob] : matcher.glob).some((pattern) => matchesGlob(pattern, matchValue))) return false;
+      }
     }
   }
   return true;
+}
+
+function normalizeCommandForPolicy(command: string): string {
+  const trimmed = command.trim();
+  const aliasNormalized = trimmed.startsWith("\\") ? trimmed.slice(1) : trimmed;
+  const [executable, ...args] = aliasNormalized.split(/\s+/);
+  if (executable?.includes("/") && executable.split("/").at(-1)?.toLowerCase() === "rm") {
+    const hasRecursive = args.some((arg) => arg === "--recursive" || (/^-[^-]/.test(arg) && /[rR]/.test(arg)));
+    const hasForce = args.some((arg) => arg === "--force" || (/^-[^-]/.test(arg) && arg.includes("f")));
+    if (hasRecursive && hasForce) return ["rm", ...args].join(" ");
+  }
+  return aliasNormalized;
 }
 
 function resolvePath(input: Readonly<Record<string, unknown>>, path: string): unknown {

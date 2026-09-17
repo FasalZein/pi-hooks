@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { createHookHost, policyEngineProvider, normalizeEvent } from "../src/index.js";
 import { resolvePresetConfig } from "../src/preset-config.js";
 import { resolveNamedEntries } from "../src/named-entries.js";
+import legacyParity from "./fixtures/legacy-command-parity.json" with { type: "json" };
 
 async function withConfig(config: Record<string, unknown> | undefined, run: (host: Awaited<ReturnType<typeof createHookHost>>) => Promise<void>) {
   const dir = await mkdtemp(join(tmpdir(), 'pi-hooks-defaults-'));
@@ -27,10 +28,19 @@ describe('configurable Preset defaults', () => {
       for (const command of ['npm run format', 'echo halt', 'git status', 'npm run verify']) expect((await dispatch(host, command)).decision).toBe('allow');
     });
   });
+  it('matches recorded outputs from the pinned legacy classifier fixture', async () => {
+    expect(legacyParity.reference).toMatchObject({ version: '1.0.5', commit: '5590a3bacbbdd055fb49d2ca031abe2c9f3e6c25', generatedBy: 'classifyCommand(command, explicitFixture)' });
+    expect(legacyParity.fixture.overrides.dangerous).toHaveLength(28);
+    await withConfig(undefined, async (host) => {
+      for (const sample of legacyParity.cases) {
+        expect((await dispatch(host, sample.command)).decision, sample.command).toBe(sample.dangerous ? 'deny' : 'allow');
+      }
+    });
+  });
   it('disables or overrides a named built-in without deleting its siblings', async () => {
     await withConfig({ rules: [{ id: 'danger-01', enabled: false }, { id: 'danger-sudo', decision: 'allow' }] }, async (host) => {
-      expect((await dispatch(host, 'rm file')).decision).toBe('allow');
-      expect((await dispatch(host, 'sudo true')).decision).toBe('allow');
+      for (const command of ['rm file', '  rm file', '/opt/tools/rm -rf disposable']) expect((await dispatch(host, command)).decision).toBe('allow');
+      for (const command of ['sudo true', '\\sudo true']) expect((await dispatch(host, command)).decision).toBe('allow');
       expect((await dispatch(host, 'mkfs.ext4 disk')).decision).toBe('deny');
     });
   });

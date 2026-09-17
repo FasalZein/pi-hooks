@@ -1,0 +1,105 @@
+{
+  "reference": {
+    "repository": "prateekmedia/pi-hooks",
+    "version": "1.0.5",
+    "commit": "5590a3bacbbdd055fb49d2ca031abe2c9f3e6c25",
+    "source": "permission/permission-core.ts",
+    "generatedBy": "classifyCommand(command, explicitFixture)"
+  },
+  "fixture": {
+    "overrides": {
+      "dangerous": [
+        "rm *",
+        "/bin/rm *",
+        "/usr/bin/rm *",
+        "*&& rm *",
+        "*; rm *",
+        "*|| rm *",
+        "*| rm *",
+        "rmdir *",
+        "unlink *",
+        "shred *",
+        "truncate *",
+        "*find * -delete*",
+        "*git clean *",
+        "*git reset --hard*",
+        "*git restore *",
+        "*git checkout -- *",
+        "*git push *--force*",
+        "*git push -f*",
+        "*rsync *--delete*",
+        "*docker system prune*",
+        "*docker volume prune*",
+        "*docker rm *",
+        "*kubectl delete *",
+        "*terraform destroy*",
+        "*pulumi destroy*",
+        "*chmod -R *",
+        "*chown -R *",
+        "wipefs *"
+      ]
+    }
+  },
+  "cases": [
+    {
+      "command": "  rm disposable",
+      "level": "high",
+      "dangerous": true
+    },
+    {
+      "command": "\trm -rf disposable",
+      "level": "high",
+      "dangerous": true
+    },
+    {
+      "command": "\\sudo true",
+      "level": "high",
+      "dangerous": true
+    },
+    {
+      "command": "\\rm -rf disposable",
+      "level": "high",
+      "dangerous": true
+    },
+    {
+      "command": "/opt/tools/rm -rf disposable",
+      "level": "high",
+      "dangerous": true
+    },
+    {
+      "command": "./rm --recursive --force disposable",
+      "level": "high",
+      "dangerous": true
+    },
+    {
+      "command": "bin/rm -R -f disposable",
+      "level": "high",
+      "dangerous": true
+    },
+    {
+      "command": "npm run verify",
+      "level": "medium",
+      "dangerous": false
+    },
+    {
+      "command": "echo /opt/tools/rm -rf disposable",
+      "level": "minimal",
+      "dangerous": false
+    },
+    {
+      "command": "printf './rm -rf disposable'",
+      "level": "minimal",
+      "dangerous": false
+    },
+    {
+      "command": "/opt/tools/rm disposable",
+      "level": "high",
+      "dangerous": false
+    },
+    {
+      "command": "echo '\\sudo true'",
+      "level": "minimal",
+      "dangerous": false
+    }
+  ]
+}

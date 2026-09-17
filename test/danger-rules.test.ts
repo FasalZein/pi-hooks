@@ -41,9 +41,24 @@ describe("Glob policy migration", () => {
   });
 
   it.each([
-    ["rm *", "RM file", true], ["rm *", "echo rm file", false], ["rm *", "rm ", true],
+    ["rm *", "RM file", true], ["rm *", "echo rm file", false], ["rm *", " rm file", false], ["rm *", "rm ", true],
     ["a.b*", "axb", false], ["file?", "filex", false], ["**x", "line\nx", true], ["x", "x\n", false],
   ])("matches %s against %s as %s", (pattern, value, expected) => expect(matchesGlob(pattern, value)).toBe(expected));
+
+  it("re-asks for the exact Host-final spelling after a transform", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-hooks-final-approval-"));
+    try {
+      const configPath = join(dir, "pi-hooks.jsonc");
+      await writeFile(configPath, JSON.stringify({ schemaVersion: 2, modules: [{ id: "rewrite" }], providers: [{ id: "policy-engine", config: { rules: [{ id: "delete", match: { tool: "bash", input: { command: { glob: "rm *" } } }, decision: "ask", scope: "deletion", remedy: "use read" }] } }] }));
+      const host = await createHookHost({ configPath, providers: [policyEngineProvider], modules: [{ id: "rewrite", tool_call: { transform: () => ({ input: { command: "  rm disposable" } }) } }] });
+      const prompts: string[] = [];
+      const result = await host.dispatch(normalizeEvent("tool_call", { toolName: "bash", toolCallId: "exact-final", input: { command: "rm disposable" } }), { cwd: dir, hasUI: true, ui: { setStatus() {}, confirm: async (_title, message) => { prompts.push(message); return true; } } });
+      expect(result).toMatchObject({ decision: "allow", input: { command: "  rm disposable" } });
+      expect(prompts).toHaveLength(2);
+      expect(prompts[0]).toContain("Command: rm disposable\n");
+      expect(prompts[1]).toContain("Command:   rm disposable\n");
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
 
   it("re-evaluates new danger after a transform and never treats a prior allow as approval", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-hooks-final-policy-"));
