@@ -65,6 +65,8 @@ export const PolicyEngineConfigSchema = Type.Object({
 
 export type PolicyRuleConfig = Static<typeof PolicyRule>;
 export type PolicyEngineConfig = Static<typeof PolicyEngineConfigSchema>;
+type RuleMatchConfig = Static<typeof RuleMatch>;
+type InputMatcherConfig = Static<typeof InputMatcher>;
 
 const SEVERITY: Record<PolicyRuleConfig["decision"], number> = {
   allow: 0,
@@ -238,34 +240,56 @@ function composeDecision(rules: readonly PolicyRuleConfig[], invocation: HookInv
   return winner;
 }
 
-function matches(match: Static<typeof RuleMatch>, invocation: HookInvocation): boolean {
-  const { event, input } = invocation;
-  if (match.tool !== undefined) {
-    const names = typeof match.tool === "string" ? [match.tool] : match.tool;
-    if (event.toolName === undefined || !names.includes(event.toolName)) return false;
-  }
-  if (match.provenance !== undefined) {
-    const source = event.provenance?.source;
-    if (match.provenance.kind === "builtin") {
-      if (source !== "builtin") return false;
-    } else if (source === undefined || source === "builtin") {
-      return false;
-    }
-    if (match.provenance.sourceId !== undefined && source !== match.provenance.sourceId) return false;
-  }
-  if (match.input !== undefined) {
-    for (const [path, matcher] of Object.entries(match.input)) {
-      const value = resolvePath(input, path);
-      if (Object.hasOwn(matcher, "equals") && canonicalJson(value) !== canonicalJson(matcher.equals)) return false;
-      if (matcher.contains !== undefined && (typeof value !== "string" || !value.includes(matcher.contains))) return false;
-      if (matcher.glob !== undefined) {
-        if (typeof value !== "string") return false;
-        const matchValue = event.toolName === "bash" && path === "command" ? normalizeCommandForPolicy(value) : value;
-        if (!(typeof matcher.glob === "string" ? [matcher.glob] : matcher.glob).some((pattern) => matchesGlob(pattern, matchValue))) return false;
-      }
-    }
+function matches(match: RuleMatchConfig, invocation: HookInvocation): boolean {
+  return matchesTool(match.tool, invocation.event.toolName)
+    && matchesProvenance(match.provenance, invocation.event.provenance?.source)
+    && matchesInput(match.input, invocation);
+}
+
+function matchesTool(expected: RuleMatchConfig["tool"], actual: string | undefined): boolean {
+  if (expected === undefined) return true;
+  const names = typeof expected === "string" ? [expected] : expected;
+  return actual !== undefined && names.includes(actual);
+}
+
+function matchesProvenance(expected: RuleMatchConfig["provenance"], source: string | undefined): boolean {
+  if (expected === undefined) return true;
+  if (!matchesProvenanceKind(expected.kind, source)) return false;
+  return expected.sourceId === undefined || source === expected.sourceId;
+}
+
+function matchesProvenanceKind(kind: "builtin" | "extension", source: string | undefined): boolean {
+  return kind === "builtin" ? source === "builtin" : source !== undefined && source !== "builtin";
+}
+
+function matchesInput(expected: RuleMatchConfig["input"], invocation: HookInvocation): boolean {
+  if (expected === undefined) return true;
+  for (const [path, matcher] of Object.entries(expected)) {
+    if (!matchesInputValue(matcher, resolvePath(invocation.input, path), path, invocation.event.toolName)) return false;
   }
   return true;
+}
+
+function matchesInputValue(matcher: InputMatcherConfig, value: unknown, path: string, toolName: string | undefined): boolean {
+  return matchesEquals(matcher, value)
+    && matchesContains(matcher, value)
+    && matchesInputGlob(matcher.glob, value, path, toolName);
+}
+
+function matchesEquals(matcher: InputMatcherConfig, value: unknown): boolean {
+  return !Object.hasOwn(matcher, "equals") || canonicalJson(value) === canonicalJson(matcher.equals);
+}
+
+function matchesContains(matcher: InputMatcherConfig, value: unknown): boolean {
+  return matcher.contains === undefined || (typeof value === "string" && value.includes(matcher.contains));
+}
+
+function matchesInputGlob(glob: InputMatcherConfig["glob"], value: unknown, path: string, toolName: string | undefined): boolean {
+  if (glob === undefined) return true;
+  if (typeof value !== "string") return false;
+  const matchValue = toolName === "bash" && path === "command" ? normalizeCommandForPolicy(value) : value;
+  const patterns = typeof glob === "string" ? [glob] : glob;
+  return patterns.some((pattern) => matchesGlob(pattern, matchValue));
 }
 
 function normalizeCommandForPolicy(command: string): string {
