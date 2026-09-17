@@ -20,7 +20,7 @@ const InputMatcher = Type.Object({
   equals: Type.Optional(Type.Unknown()),
   /** Substring match on a string value. */
   contains: Type.Optional(Type.String({ minLength: 1 })),
-  glob: Type.Optional(Type.String({ minLength: 1 })),
+  glob: Type.Optional(Type.Union([Type.String({ minLength: 1 }), Type.Array(Type.String({ minLength: 1 }), { minItems: 1 })])),
 }, { additionalProperties: false });
 
 const RuleMatch = Type.Object({
@@ -258,7 +258,7 @@ function matches(match: Static<typeof RuleMatch>, invocation: HookInvocation): b
       const value = resolvePath(input, path);
       if (Object.hasOwn(matcher, "equals") && canonicalJson(value) !== canonicalJson(matcher.equals)) return false;
       if (matcher.contains !== undefined && (typeof value !== "string" || !value.includes(matcher.contains))) return false;
-      if (matcher.glob !== undefined && (typeof value !== "string" || !matchesGlob(matcher.glob, value))) return false;
+      if (matcher.glob !== undefined && (typeof value !== "string" || !(typeof matcher.glob === "string" ? [matcher.glob] : matcher.glob).some((pattern) => matchesGlob(pattern, value)))) return false;
     }
   }
   return true;

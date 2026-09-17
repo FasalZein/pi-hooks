@@ -24,6 +24,10 @@ const ProviderEntry = Type.Object({
   config: Type.Optional(Type.Unknown()),
 }, { additionalProperties: false });
 
+const NamedOverride = Type.Object({
+  id: Type.String({ minLength: 1 }), enabled: Type.Optional(Type.Boolean()),
+}, { additionalProperties: true });
+
 const GlobalConfigSchema = Type.Object({
   // schemaVersion 1 is accepted and migrated to 2; any other value is rejected
   // with a precise error (Inactive Host on invalid global config).
@@ -31,6 +35,18 @@ const GlobalConfigSchema = Type.Object({
   modules: Type.Optional(Type.Array(ModuleEntry)),
   providers: Type.Optional(Type.Array(ProviderEntry)),
   rendering: Type.Optional(Type.Boolean()),
+  rules: Type.Optional(Type.Array(NamedOverride)),
+  recipes: Type.Optional(Type.Array(NamedOverride)),
+  lsp: Type.Optional(Type.Object({
+    servers: Type.Optional(Type.Record(Type.String({ minLength: 1 }), Type.Union([Type.Null(), Type.Object({}, { additionalProperties: true })]))),
+    enablement: Type.Optional(Type.Record(Type.String({ minLength: 1 }), Type.Boolean())),
+    timeouts: Type.Optional(Type.Object({
+      diagnosticsMs: Type.Optional(Type.Integer({ minimum: 1 })),
+      initializeMs: Type.Optional(Type.Integer({ minimum: 1 })),
+      requestMs: Type.Optional(Type.Integer({ minimum: 1 })),
+      shutdownMs: Type.Optional(Type.Integer({ minimum: 1 })),
+    }, { additionalProperties: false })),
+  }, { additionalProperties: false })),
   audit: Type.Optional(Type.Object({
     path: Type.Optional(Type.String({ minLength: 1 })),
     includeAllows: Type.Optional(Type.Boolean()),
@@ -52,12 +68,22 @@ export interface ProviderConfigEntry {
   config?: unknown;
 }
 
+export interface NamedOverride { id: string; enabled?: boolean; [key: string]: unknown }
+export interface LspConfig {
+  servers?: Record<string, Record<string, unknown> | null>;
+  enablement?: Record<string, boolean>;
+  timeouts?: { diagnosticsMs?: number; initializeMs?: number; requestMs?: number; shutdownMs?: number };
+}
+
 export interface GlobalConfig {
   /** Always normalized to the current schema version. */
   schemaVersion: 2;
   modules: ModuleConfigEntry[];
   providers: ProviderConfigEntry[];
   rendering?: boolean;
+  rules?: NamedOverride[];
+  recipes?: NamedOverride[];
+  lsp?: LspConfig;
   audit?: { path?: string; includeAllows?: boolean };
 }
 
@@ -70,6 +96,10 @@ export async function loadGlobalConfig(path: string): Promise<GlobalConfig> {
     throw new Error(`Cannot read trusted global configuration ${path}: ${message(error)}`);
   }
 
+  return parseGlobalConfig(text);
+}
+
+export function parseGlobalConfig(text: string): GlobalConfig {
   const parseErrors: ParseError[] = [];
   const value = parse(text, parseErrors, { allowTrailingComma: true, disallowComments: false });
   if (parseErrors.length > 0) {
@@ -87,6 +117,9 @@ interface RawGlobalConfig {
   modules?: ModuleConfigEntry[];
   providers?: ProviderConfigEntry[];
   rendering?: boolean;
+  rules?: NamedOverride[];
+  recipes?: NamedOverride[];
+  lsp?: LspConfig;
   audit?: { path?: string; includeAllows?: boolean };
 }
 
@@ -98,6 +131,9 @@ function migrate(raw: RawGlobalConfig): GlobalConfig {
     providers: raw.providers ?? [],
     ...(raw.rendering !== undefined ? { rendering: raw.rendering } : {}),
     ...(raw.audit ? { audit: raw.audit } : {}),
+    ...(raw.rules ? { rules: raw.rules } : {}),
+    ...(raw.recipes ? { recipes: raw.recipes } : {}),
+    ...(raw.lsp ? { lsp: raw.lsp } : {}),
   };
 }
 

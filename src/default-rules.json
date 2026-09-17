@@ -1,0 +1,823 @@
+[
+  {
+    "id": "danger-01",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": "rm *"
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-02",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": "/bin/rm *"
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-03",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": "/usr/bin/rm *"
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-04",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": "*&& rm *"
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-05",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": "*; rm *"
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-06",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": "*|| rm *"
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-07",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": "*| rm *"
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-08",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": "rmdir *"
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-09",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": "unlink *"
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-10",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": "shred *"
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-11",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": "truncate *"
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-12",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": "*find * -delete*"
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-13",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": "*git clean *"
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-14",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": "*git reset --hard*"
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-15",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": "*git restore *"
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-16",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": "*git checkout -- *"
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-17",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": "*git push *--force*"
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-18",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": "*git push -f*"
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-19",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": "*rsync *--delete*"
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-20",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": "*docker system prune*"
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-21",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": "*docker volume prune*"
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-22",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": "*docker rm *"
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-23",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": "*kubectl delete *"
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-24",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": "*terraform destroy*"
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-25",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": "*pulumi destroy*"
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-26",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": "*chmod -R *"
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-27",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": "*chown -R *"
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-28",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": "wipefs *"
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-sudo",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": [
+            "sudo",
+            "*/sudo",
+            "*; sudo",
+            "*;sudo",
+            "*&& sudo",
+            "*&&sudo",
+            "*|| sudo",
+            "*||sudo",
+            "*| sudo",
+            "*|sudo",
+            "sudo *",
+            "*/sudo *",
+            "*; sudo *",
+            "*;sudo *",
+            "*&& sudo *",
+            "*&&sudo *",
+            "*|| sudo *",
+            "*||sudo *",
+            "*| sudo *",
+            "*|sudo *"
+          ]
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "privileged or destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-chmod-world",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": [
+            "chmod *777*",
+            "*/chmod *777*",
+            "*; chmod *777*",
+            "*;chmod *777*",
+            "*&& chmod *777*",
+            "*&&chmod *777*",
+            "*|| chmod *777*",
+            "*||chmod *777*",
+            "*| chmod *777*",
+            "*|chmod *777*"
+          ]
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "privileged or destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-chmod-all",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": [
+            "chmod *a+rwx*",
+            "*/chmod *a+rwx*",
+            "*; chmod *a+rwx*",
+            "*;chmod *a+rwx*",
+            "*&& chmod *a+rwx*",
+            "*&&chmod *a+rwx*",
+            "*|| chmod *a+rwx*",
+            "*||chmod *a+rwx*",
+            "*| chmod *a+rwx*",
+            "*|chmod *a+rwx*"
+          ]
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "privileged or destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-device-write",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": [
+            "dd *of=/dev/*",
+            "*/dd *of=/dev/*",
+            "*; dd *of=/dev/*",
+            "*;dd *of=/dev/*",
+            "*&& dd *of=/dev/*",
+            "*&&dd *of=/dev/*",
+            "*|| dd *of=/dev/*",
+            "*||dd *of=/dev/*",
+            "*| dd *of=/dev/*",
+            "*|dd *of=/dev/*"
+          ]
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "privileged or destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-filesystem-format",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": [
+            "mkfs*",
+            "*/mkfs*",
+            "*; mkfs*",
+            "*;mkfs*",
+            "*&& mkfs*",
+            "*&&mkfs*",
+            "*|| mkfs*",
+            "*||mkfs*",
+            "*| mkfs*",
+            "*|mkfs*"
+          ]
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "privileged or destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-partition-fdisk",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": [
+            "fdisk",
+            "*/fdisk",
+            "*; fdisk",
+            "*;fdisk",
+            "*&& fdisk",
+            "*&&fdisk",
+            "*|| fdisk",
+            "*||fdisk",
+            "*| fdisk",
+            "*|fdisk",
+            "fdisk *",
+            "*/fdisk *",
+            "*; fdisk *",
+            "*;fdisk *",
+            "*&& fdisk *",
+            "*&&fdisk *",
+            "*|| fdisk *",
+            "*||fdisk *",
+            "*| fdisk *",
+            "*|fdisk *"
+          ]
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "privileged or destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-partition-parted",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": [
+            "parted",
+            "*/parted",
+            "*; parted",
+            "*;parted",
+            "*&& parted",
+            "*&&parted",
+            "*|| parted",
+            "*||parted",
+            "*| parted",
+            "*|parted",
+            "parted *",
+            "*/parted *",
+            "*; parted *",
+            "*;parted *",
+            "*&& parted *",
+            "*&&parted *",
+            "*|| parted *",
+            "*||parted *",
+            "*| parted *",
+            "*|parted *"
+          ]
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "privileged or destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-disk-format",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": [
+            "format",
+            "*/format",
+            "*; format",
+            "*;format",
+            "*&& format",
+            "*&&format",
+            "*|| format",
+            "*||format",
+            "*| format",
+            "*|format",
+            "format *",
+            "*/format *",
+            "*; format *",
+            "*;format *",
+            "*&& format *",
+            "*&&format *",
+            "*|| format *",
+            "*||format *",
+            "*| format *",
+            "*|format *"
+          ]
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "privileged or destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-shutdown",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": [
+            "shutdown",
+            "*/shutdown",
+            "*; shutdown",
+            "*;shutdown",
+            "*&& shutdown",
+            "*&&shutdown",
+            "*|| shutdown",
+            "*||shutdown",
+            "*| shutdown",
+            "*|shutdown",
+            "shutdown *",
+            "*/shutdown *",
+            "*; shutdown *",
+            "*;shutdown *",
+            "*&& shutdown *",
+            "*&&shutdown *",
+            "*|| shutdown *",
+            "*||shutdown *",
+            "*| shutdown *",
+            "*|shutdown *"
+          ]
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "privileged or destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-reboot",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": [
+            "reboot",
+            "*/reboot",
+            "*; reboot",
+            "*;reboot",
+            "*&& reboot",
+            "*&&reboot",
+            "*|| reboot",
+            "*||reboot",
+            "*| reboot",
+            "*|reboot",
+            "reboot *",
+            "*/reboot *",
+            "*; reboot *",
+            "*;reboot *",
+            "*&& reboot *",
+            "*&&reboot *",
+            "*|| reboot *",
+            "*||reboot *",
+            "*| reboot *",
+            "*|reboot *"
+          ]
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "privileged or destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-halt",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": [
+            "halt",
+            "*/halt",
+            "*; halt",
+            "*;halt",
+            "*&& halt",
+            "*&&halt",
+            "*|| halt",
+            "*||halt",
+            "*| halt",
+            "*|halt",
+            "halt *",
+            "*/halt *",
+            "*; halt *",
+            "*;halt *",
+            "*&& halt *",
+            "*&&halt *",
+            "*|| halt *",
+            "*||halt *",
+            "*| halt *",
+            "*|halt *"
+          ]
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "privileged or destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-poweroff",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": [
+            "poweroff",
+            "*/poweroff",
+            "*; poweroff",
+            "*;poweroff",
+            "*&& poweroff",
+            "*&&poweroff",
+            "*|| poweroff",
+            "*||poweroff",
+            "*| poweroff",
+            "*|poweroff",
+            "poweroff *",
+            "*/poweroff *",
+            "*; poweroff *",
+            "*;poweroff *",
+            "*&& poweroff *",
+            "*&&poweroff *",
+            "*|| poweroff *",
+            "*||poweroff *",
+            "*| poweroff *",
+            "*|poweroff *"
+          ]
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "privileged or destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-init",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": [
+            "init",
+            "*/init",
+            "*; init",
+            "*;init",
+            "*&& init",
+            "*&&init",
+            "*|| init",
+            "*||init",
+            "*| init",
+            "*|init",
+            "init *",
+            "*/init *",
+            "*; init *",
+            "*;init *",
+            "*&& init *",
+            "*&&init *",
+            "*|| init *",
+            "*||init *",
+            "*| init *",
+            "*|init *"
+          ]
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "privileged or destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  },
+  {
+    "id": "danger-fork-bomb",
+    "match": {
+      "tool": "bash",
+      "input": {
+        "command": {
+          "glob": "*:(){*:*|:*&*}*:*"
+        }
+      }
+    },
+    "decision": "ask",
+    "scope": "privileged or destructive shell commands",
+    "remedy": "Approve this exact command interactively or use a non-destructive command"
+  }
+]

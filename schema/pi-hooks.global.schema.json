@@ -4,11 +4,16 @@
   "title": "Pi Hooks trusted global configuration v2",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion"],
+  "required": [
+    "schemaVersion"
+  ],
   "properties": {
     "schemaVersion": {
       "description": "1 is accepted and migrated in-memory to 2; the on-disk file is never rewritten.",
-      "enum": [1, 2]
+      "enum": [
+        1,
+        2
+      ]
     },
     "modules": {
       "description": "events-grant shorthand: Hook Modules on the nine-event contract.",
@@ -16,11 +21,22 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "properties": {
-          "id": { "type": "string", "minLength": 1 },
-          "enabled": { "type": "boolean", "default": true },
-          "required": { "type": "boolean", "default": true }
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "required": {
+            "type": "boolean",
+            "default": true
+          }
         }
       }
     },
@@ -30,12 +46,25 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "properties": {
-          "id": { "type": "string", "minLength": 1 },
-          "enabled": { "type": "boolean", "default": true },
-          "required": { "type": "boolean", "default": true },
-          "config": { "description": "Validated against the provider manifest configSchema." }
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "required": {
+            "type": "boolean",
+            "default": true
+          },
+          "config": {
+            "description": "Validated against the provider manifest configSchema."
+          }
         }
       }
     },
@@ -48,8 +77,95 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "path": { "type": "string", "minLength": 1 },
-        "includeAllows": { "type": "boolean", "default": false }
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "includeAllows": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "rules": {
+      "description": "Named overrides to Preset Policy Rules; enabled false disables an id.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "recipes": {
+      "description": "Named Recipe entries, validated by Action Engine.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "lsp": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "servers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "enablement": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "boolean"
+          }
+        },
+        "timeouts": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "diagnosticsMs": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "initializeMs": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "requestMs": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "shutdownMs": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
       }
     }
   }

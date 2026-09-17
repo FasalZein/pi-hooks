@@ -39,6 +39,8 @@ export interface CreateHookHostOptions {
   configPath?: string;
   /** Explicit composition defaults; user entries override them by id. */
   providerDefaults?: readonly ProviderConfigEntry[];
+  /** Trusted Preset configuration resolution, before activation. */
+  configure?: (config: GlobalConfig) => GlobalConfig;
   preset?: string;
   modules?: readonly HookModule[];
   providers?: readonly AnyCapabilityProvider[];
@@ -68,7 +70,8 @@ export async function createHookHost(options: CreateHookHostOptions = {}): Promi
   let preparationFailures: string[] = [];
 
   try {
-    config = await loadGlobalConfig(configPath);
+    const loaded = await loadGlobalConfig(configPath);
+    config = options.configure ? options.configure(loaded) : loaded;
     const configured = new Set(config.providers.map((entry) => entry.id));
     config.providers = [...(options.providerDefaults ?? []).filter((entry) => !configured.has(entry.id)), ...config.providers];
   } catch (error) {

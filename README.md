@@ -12,7 +12,7 @@ and loads trusted **Capability Providers**, each declaring exactly the grants it
 pi install /absolute/path/to/pi-hooks
 ```
 
-The package manifest loads the named `piHooksPreset`, which composes the Host and Policy Engine. The Preset supplies an empty rules list. Configuration entries override Preset defaults by Provider id. Use `/hooks status` to inspect the composition.
+The package manifest loads the named `piHooksPreset`, which composes the Host and Policy Engine. The Preset supplies 42 named ask rules: the 28 migrated patterns and 14 additional privileged-operation rules. Top-level `rules` entries extend defaults by id; `enabled: false` disables an id. Top-level `recipes` adds named Recipes. Explicit `providers` entries remain complete Provider configuration overrides for library users. Use `/hooks status` to inspect the composition.
 
 Code imports of the package root receive the Bare Host default instead. The Preset is also available as a named export or through `@tothemoon/pi-hooks/preset`.
 
@@ -48,7 +48,7 @@ Use `/hooks status` for activation, configuration health, runtime health, audit 
 
 [`examples/dangerous-commands.json`](examples/dangerous-commands.json) contains the 28 migrated ask rules. Copy its Provider entry into trusted global configuration. It does not import old settings automatically.
 
-`glob` matches the complete command, ignores case, and treats only `*` as a wildcard. It is not a shell parser or a sandbox. Approval applies once to the exact input. A Host transform requires fresh approval if that input changes. Without a UI, ask rules deny with a remedy.
+`glob` matches the complete command, ignores case, and treats only `*` as a wildcard. An array of glob patterns matches any member. It is not a shell parser or a sandbox. Approval applies once to the exact input. A Host transform requires fresh approval if that input changes. Without a UI, ask rules deny with a remedy.
 
 ### Recipes
 
