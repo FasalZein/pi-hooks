@@ -287,9 +287,9 @@ function matchesContains(matcher: InputMatcherConfig, value: unknown): boolean {
 function matchesInputGlob(glob: InputMatcherConfig["glob"], value: unknown, path: string, toolName: string | undefined): boolean {
   if (glob === undefined) return true;
   if (typeof value !== "string") return false;
-  const matchValue = toolName === "bash" && path === "command" ? normalizeCommandForPolicy(value) : value;
+  const normalized = toolName === "bash" && path === "command" ? normalizeCommandForPolicy(value) : value;
   const patterns = typeof glob === "string" ? [glob] : glob;
-  return patterns.some((pattern) => matchesGlob(pattern, matchValue));
+  return patterns.some((pattern) => matchesGlob(pattern, value) || (normalized !== value && matchesGlob(pattern, normalized)));
 }
 
 function normalizeCommandForPolicy(command: string): string {

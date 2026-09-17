@@ -44,6 +44,23 @@ describe('configurable Preset defaults', () => {
       expect((await dispatch(host, 'mkfs.ext4 disk')).decision).toBe('deny');
     });
   });
+  it('keeps configured raw command globs alongside normalized protection', async () => {
+    await withConfig({ rules: [
+      { id: 'danger-01', enabled: false },
+      { id: 'danger-sudo', decision: 'allow' },
+      { id: 'custom-bin-rm', match: { tool: 'bash', input: { command: { glob: '/bin/rm *' } } }, decision: 'deny', scope: 'configured path protection', remedy: 'use a non-destructive command' },
+      { id: 'custom-spaced-rm', match: { tool: 'bash', input: { command: { glob: '  rm *' } } }, decision: 'deny', scope: 'configured whitespace protection', remedy: 'use a non-destructive command' },
+      { id: 'custom-escaped-sudo', match: { tool: 'bash', input: { command: { glob: '\\sudo *' } } }, decision: 'deny', scope: 'configured escape protection', remedy: 'use an unprivileged command' },
+    ] }, async (host) => {
+      for (const [command, ruleId] of [
+        ['/bin/rm -rf disposable', 'custom-bin-rm'],
+        ['  rm disposable', 'custom-spaced-rm'],
+        ['\\sudo true', 'custom-escaped-sudo'],
+      ] as const) {
+        expect(await dispatch(host, command)).toMatchObject({ decision: 'deny', reason: expect.stringContaining(ruleId) });
+      }
+    });
+  });
   it('adds a new named rule and rejects duplicate ids', async () => {
     const rule = { id: 'build', match: { tool: 'bash', input: { command: { glob: 'npm run build' } } }, decision: 'deny', scope: 'build', remedy: 'use tests' };
     await withConfig({ rules: [rule] }, async (host) => expect(await dispatch(host, 'npm run build')).toMatchObject({ decision: 'deny', reason: expect.stringContaining('build') }));
