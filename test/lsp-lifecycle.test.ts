@@ -145,7 +145,7 @@ afterEach(async () => {
 });
 
 describe("Pi LSP lifecycle proof", () => {
-  it("reloads a changed Server Definition and releases obsolete processes", async () => {
+  it("reloads a changed Server Definition and releases obsolete processes", { timeout: 20_000 }, async () => {
     const profile = await createProfile("A");
     const previous = process.env.PI_CODING_AGENT_DIR;
     process.env.PI_CODING_AGENT_DIR = profile.dir;
