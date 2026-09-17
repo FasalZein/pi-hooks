@@ -44,6 +44,19 @@ async function status(session: AgentSession) {
 
 const bare = `export { default } from ${JSON.stringify(entry)};`;
 
+async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 5000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return predicate();
+}
+
+function isAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
 describe("ADR-001 activation at the real Pi boundary", () => {
   it("keeps the Bare Host active with missing configuration and passes bash unchanged", async () => {
     await withSession(undefined, bare, async (session) => {
@@ -176,7 +189,7 @@ describe("ADR-001 activation at the real Pi boundary", () => {
           f.tools.registerTool({ name: "probe", label: "Probe", description: "probe", parameters: Type.Object({}), execute: async () => ({ content: [{ type: "text", text: "ran" }] }) });
           f.commands.registerCommand("probe-command", { description: "probe", handler: async () => {} });
           f.events.registerModule({ id: "probe-event", tool_call: { transform: () => ({ input: { changed: true } }) } });
-          f.process.spawn({ id: "probe-process", command: process.execPath, args: ["-e", "require('fs').writeFileSync(process.argv[1], 'ran')", join(process.env.PI_CODING_AGENT_DIR, "process.txt")] });
+          f.process.spawn({ id: "probe-process", command: process.execPath, args: ["-e", "require('fs').writeFileSync(process.argv[1], String(process.pid)); setInterval(()=>{}, 10000)", join(process.env.PI_CODING_AGENT_DIR, "process.txt")] });
           f.ui.setStatus("probe-status", "active");
         }
       });
@@ -192,14 +205,33 @@ describe("ADR-001 activation at the real Pi boundary", () => {
       const input: Record<string, unknown> = { command: "echo unchanged" };
       await session.extensionRunner!.emitToolCall({ type: "tool_call", toolName: "bash", toolCallId: "rollback", input } as never);
       expect(input).toEqual(required ? { command: "echo unchanged" } : { changed: true });
-      if (required) {
-        const uiCalls: unknown[] = [];
-        await session.bindExtensions({ uiContext: { setStatus: (...args: unknown[]) => uiCalls.push(args) } as never });
-        expect(uiCalls).toEqual([]);
-        expect(report.providers.every((provider: { enabled: boolean }) => !provider.enabled)).toBe(true);
-        expect(Object.values(report.phaseOrder).flat()).toEqual([]);
-        await expect(readFile(join(dir, "process.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      const processMarker = join(dir, "process.txt");
+      await session.extensionRunner!.emit({ type: "session_start", reason: "startup" } as never);
+      let startedPid: number | undefined;
+      try {
+        if (required) {
+          const uiCalls: unknown[] = [];
+          await session.bindExtensions({ uiContext: { setStatus: (...args: unknown[]) => uiCalls.push(args) } as never });
+          expect(uiCalls).toEqual([]);
+          expect(report.providers.every((provider: { enabled: boolean }) => !provider.enabled)).toBe(true);
+          expect(Object.values(report.phaseOrder).flat()).toEqual([]);
+          expect(await waitFor(async () => {
+            try { await readFile(processMarker, "utf8"); return true; } catch { return false; }
+          })).toBe(false);
+          await expect(readFile(processMarker, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+        } else {
+          // This branch is the negative control: the same staged process becomes
+          // observable at session_start when rollback must not remove it.
+          expect(await waitFor(async () => {
+            try { await readFile(processMarker, "utf8"); return true; } catch { return false; }
+          })).toBe(true);
+          startedPid = Number(await readFile(processMarker, "utf8"));
+          expect(isAlive(startedPid)).toBe(true);
+        }
+      } finally {
+        await session.extensionRunner!.emit({ type: "session_shutdown", reason: "quit" } as never);
       }
+      if (startedPid !== undefined) expect(await waitFor(() => !isAlive(startedPid))).toBe(true);
     });
-  });
+  }, 30_000);
 });
