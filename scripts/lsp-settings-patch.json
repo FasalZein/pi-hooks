@@ -64,6 +64,26 @@
       "suffix": "",
       "originalSha256": "8c4460de6c33f8e6392c8a3f739c6a3b109b349de5367a61bf8054d8b21d8bc7",
       "patchedSha256": "b3b240e122d2d8ead6fec88bf0f18323a82fbcec22469b4c1795a07f81d905b2"
+    },
+    {
+      "path": "src/lsp-post-edit-diagnostics.ts",
+      "replacements": [
+        [
+          "import type { ToolResultEvent } from \"@earendil-works/pi-coding-agent\";",
+          "import { realpathSync } from \"node:fs\";\nimport type { ToolResultEvent } from \"@earendil-works/pi-coding-agent\";"
+        ],
+        [
+          "function pathsAfterMutation(result: ReturnType<typeof mutationResult>): PostEditDiagnosticPath[] {\n  const deletedPaths = new Set(result.deletedPaths);\n  return [...new Set(result.changedPaths)]\n    .filter((path) => !deletedPaths.has(path))\n    .sort((left, right) => left.localeCompare(right))\n    .map((path) => ({ path }));\n}\n",
+          "function pathsAfterMutation(result: ReturnType<typeof mutationResult>): PostEditDiagnosticPath[] {\n  const deletedPaths = new Set(result.deletedPaths);\n  return [...new Set(result.changedPaths)]\n    .filter((path) => !deletedPaths.has(path))\n    .sort((left, right) => left.localeCompare(right))\n    .map((path) => ({ path }));\n}\n\nfunction pathsReferToSameExistingFile(left: string, right: string): boolean {\n  if (left === right) return true;\n  try {\n    return realpathSync(left) === realpathSync(right);\n  } catch {\n    return false;\n  }\n}\n"
+        ],
+        [
+          "    const verifiedManifestPaths = manifestDestinationPaths(event.input.mutation_manifest);\n    const actualPaths = new Set(event.details.changed_paths);\n    return {\n      paths: verifiedManifestPaths\n        .filter((path) => actualPaths.has(path))\n",
+          "    const verifiedManifestPaths = manifestDestinationPaths(event.input.mutation_manifest);\n    const actualPaths = event.details.changed_paths;\n    return {\n      paths: verifiedManifestPaths\n        .filter((path) => actualPaths.some((actualPath) => pathsReferToSameExistingFile(path, actualPath)))\n"
+        ]
+      ],
+      "suffix": "",
+      "originalSha256": "e04809746ca2712f6749fb28e44a75eee8ec74b49f6892c1fbce08a36999bf90",
+      "patchedSha256": "da7c449f2d4792b44406c0646560e6b2303fe89a2d09d833c067cabc173dc900"
     }
   ]
 }

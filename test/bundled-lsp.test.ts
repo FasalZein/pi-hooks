@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -38,7 +39,11 @@ async function prepareToolCall(session: AgentSession, name: string, input: Recor
 
 describe("bundled pi-lsp go/no-go", () => {
   it("loads one packed LSP, resolves its dependencies, and attaches live TypeScript diagnostics after edit", async () => {
-    const dir = await mkdtemp(join(await realpath(tmpdir()), "pi-hooks-lsp-bundle-"));
+    const fixtureRoot = await mkdtemp(join(await realpath(tmpdir()), "pi-hooks-lsp-bundle-"));
+    const actualDir = join(fixtureRoot, "project");
+    const dir = join(fixtureRoot, "project-alias");
+    await mkdir(actualDir);
+    await symlink(actualDir, dir, "dir");
     const previous = process.env.PI_CODING_AGENT_DIR;
     process.env.PI_CODING_AGENT_DIR = dir;
     try {
@@ -50,6 +55,13 @@ describe("bundled pi-lsp go/no-go", () => {
       expect(tsgoVersion).toContain("7.0.0-dev.20260707.2");
       const manifest = JSON.parse(await readFile(join(packageDir, "package.json"), "utf8"));
       expect(manifest.dependencies["@ian-pascoe/pi-lsp"]).toBe("0.4.4");
+      const patch = JSON.parse(await readFile(join(packageDir, "scripts/lsp-settings-patch.json"), "utf8")) as {
+        files: Array<{ path: string; patchedSha256: string }>;
+      };
+      for (const patchedFile of patch.files) {
+        const source = await readFile(join(packageDir, "node_modules/@ian-pascoe/pi-lsp", patchedFile.path));
+        expect(createHash("sha256").update(source).digest("hex")).toBe(patchedFile.patchedSha256);
+      }
       for (const resource of [...manifest.pi.extensions, ...manifest.pi.skills.map((path: string) => `${path}/pi-lsp/SKILL.md`)]) {
         expect(await readFile(join(packageDir, resource), "utf8")).not.toBe("");
       }
@@ -63,7 +75,7 @@ describe("bundled pi-lsp go/no-go", () => {
       expect(packedGuide).toContain("Reload Pi after changing a Server Definition");
       const fromLsp = createRequire(join(packageDir, "node_modules/@ian-pascoe/pi-lsp/package.json"));
       for (const dependency of ["cross-spawn", "proper-lockfile", "vscode-languageserver-protocol/node"]) {
-        expect(fromLsp.resolve(dependency)).toContain(dir);
+        expect(fromLsp.resolve(dependency)).toContain(actualDir);
         console.log(`Bundled dependency: ${dependency} -> ${fromLsp.resolve(dependency)}`);
       }
       await writeFile(join(dir, "settings.json"), JSON.stringify({ packages: [packageDir] }));
@@ -154,6 +166,13 @@ describe("bundled pi-lsp go/no-go", () => {
         const formatted = await readFile(file, "utf8");
         expect(formatted).not.toBe(unformatted);
         expect(formatted).toContain('const value: number = "another error"');
+        expect(formatDetails.mutation_manifest).toEqual([
+          expect.objectContaining({ path: join(actualDir, "example.ts") }),
+        ]);
+        expect(formatApply.details).toMatchObject({
+          changed_paths: [file],
+          state: "applied",
+        });
         expect(JSON.stringify(formatApply.content)).toContain("LSP diagnostics");
         expect(approvalPrompts.at(-1)).toContain("example.ts");
 
@@ -271,7 +290,7 @@ describe("bundled pi-lsp go/no-go", () => {
     } finally {
       if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = previous;
-      await rm(dir, { recursive: true, force: true });
+      await rm(fixtureRoot, { recursive: true, force: true });
     }
   }, 60_000);
 });

@@ -54,7 +54,7 @@ describe("checked pi-lsp dependency patch", () => {
       await exec(process.execPath, [join(dir, "scripts/patch-lsp.mjs")], { cwd: dir });
       for (const file of patch.files) expect(await readFile(join(dependency, file.path), "utf8")).toBe(once.get(file.path));
 
-      const changed = patch.files[1]!;
+      const changed = patch.files.at(-1)!;
       await writeFile(join(dependency, changed.path), `${once.get(changed.path)}\nchanged`);
       await expect(exec(process.execPath, [join(dir, "scripts/patch-lsp.mjs")], { cwd: dir })).rejects.toMatchObject({
         stderr: expect.stringContaining(`dependency source changed at ${changed.path}`),

@@ -6,7 +6,7 @@ The consolidated pi-hooks package passes 157 tests, but independent source compa
 
 The tests also lack direct evidence for integrated LSP workspace edits and session transitions, and for Recipe cancellation during an active Pi turn. Replacing the installed packages now risks silent loss of protection or functionality.
 
-This specification repairs those gaps. It supplements #1 and preserves the decisions in ADR-0001, ADR-0002 and ADR-0003. It does not restore intentionally removed features.
+This specification repairs those gaps. It supplements #1 and preserves the decisions in ADR-0001 through ADR-0004. It does not restore intentionally removed features.
 
 ## Solution
 
@@ -54,6 +54,7 @@ Make the consolidated package preserve the agreed behavior, prove it at the real
 - Make optional Recipe validation consistent through the Preset configuration path, including duplicate Recipe ids. Whole-document syntax/schema failure still produces an Inactive Host.
 - Document top-level named Recipes as the operator path. Retain explicit whole-Provider override semantics for composers and make mixed-form replacement visible rather than inventing another merge policy.
 - Keep the complete upstream LSP tool, protocol and workspace-edit implementation. Repair the adapter around it instead of replacing those components.
+- Apply the ADR-0004 exception only to post-edit diagnostic matching. Equivalent path spellings must resolve to the same existing file. Keep Approval, Mutation Manifest validation, execution input, write authorization, apply, cancellation, rollback, and protocol behavior unchanged.
 - Exclude and warn on an invalid per-server enablement value while preserving valid siblings. Do not relax the closed global configuration schema.
 - Keep global dedicated JSONC as the configuration owner. Preserve session-scoped toggles. Exclude project scope from offered actions; manually supplied unsupported arguments still receive a Remedy.
 - Publish configuration-correct skill guidance with the package. Verify the packaged skill and linked guidance, not only contributor documentation.
