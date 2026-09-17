@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { createAgentSession, DefaultResourceLoader, SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
@@ -12,6 +14,7 @@ const entry = fileURLToPath(new URL("../src/preset.ts", import.meta.url));
 const hooksIndexPath = fileURLToPath(new URL("../src/index.ts", import.meta.url));
 const command = (script: string) => ({ command: process.execPath, args: ["-e", script] });
 const recipe = (id: string, event: string, script: string, extra: Partial<Recipe> = {}): Recipe => ({ id, event, commands: [command(script)], timeoutMs: 3000, ...extra });
+const execFileAsync = promisify(execFile);
 
 async function withRecipes(
   recipes: unknown[],
@@ -88,6 +91,17 @@ describe("Action Engine via the real Pi loader", () => {
       else expect(result).toBeUndefined();
       expect((await status(session)).runtime).toMatchObject({ health: "degraded", lastFailure: expect.stringContaining("timed out") });
       expect(await readFile(join(dir, "audit.jsonl"), "utf8")).toContain('"provider":"action-engine"');
+    });
+  });
+
+  it("bounds an idle lifecycle Recipe by its explicit timeout", async () => {
+    await withRecipes([recipe("idle-lifecycle", "session_start", "setInterval(()=>{},1000)", { timeoutMs: 20 })], async (session) => {
+      expect(session.isIdle).toBe(true);
+      await session.extensionRunner!.emit({ type: "session_start", reason: "startup" });
+      expect((await status(session)).runtime).toMatchObject({
+        health: "degraded",
+        lastFailure: expect.stringContaining("Recipe idle-lifecycle: command timed out after 20ms"),
+      });
     });
   });
 
@@ -245,4 +259,147 @@ describe("Recipe child lifecycle", () => {
     await expect(runProcess(spec)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(runProcess({ ...spec, ...command("setInterval(()=>{},1000)"), signal: AbortSignal.abort() })).rejects.toThrow("aborted");
   });
+
+  it.runIf(process.platform !== "win32").each(["ignore", "block"] as const)(
+    "aborts an active Pi turn Recipe process group with onFailure %s",
+    async (onFailure) => {
+      const timeoutMs = 5000;
+      await withRecipes([
+        recipe("active-cancel", "tool_call", activeProcessTreeScript("active-process.json"), { timeoutMs, onFailure }),
+      ], async (session, dir) => {
+        const run = runActiveToolTurn(session);
+        let pids: { leader: number; descendant: number } | undefined;
+        try {
+          pids = await readJsonWhenReady(join(dir, "active-process.json"), timeoutMs);
+          expect(session.isIdle).toBe(false);
+          expect(await processGroupId(pids.leader)).toBe(pids.leader);
+          expect(await processGroupId(pids.descendant)).toBe(pids.leader);
+          expect(isProcessAlive(pids.leader)).toBe(true);
+          expect(isProcessAlive(pids.descendant)).toBe(true);
+
+          await session.abort();
+          await run;
+
+          await waitForProcessExit(pids.leader, timeoutMs);
+          await waitForProcessExit(pids.descendant, timeoutMs);
+          expect(isProcessAlive(pids.leader)).toBe(false);
+          expect(isProcessAlive(pids.descendant)).toBe(false);
+
+          const currentStatus = await status(session);
+          expect(currentStatus.runtime).toMatchObject({
+            health: "degraded",
+            lastFailure: expect.stringContaining("Recipe active-cancel: command aborted"),
+          });
+          expect(currentStatus.providers).toContainEqual(expect.objectContaining({
+            id: "action-engine",
+            health: "degraded",
+            lastFailure: expect.stringContaining("Recipe active-cancel: command aborted"),
+          }));
+
+          const audit = (await readFile(join(dir, "audit.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+          expect(audit).toContainEqual(expect.objectContaining({
+            moduleId: "recipe:active-cancel",
+            provider: "action-engine",
+            eventType: "tool_call",
+            phase: "guard",
+            decision: "module-failure",
+            reason: "[REDACTED]",
+          }));
+          expect(audit).toContainEqual(expect.objectContaining({
+            moduleId: onFailure === "block" ? "recipe:active-cancel" : "host",
+            eventType: "tool_call",
+            decision: onFailure === "block" ? "deny" : "allow",
+          }));
+        } finally {
+          if (!session.isIdle) await session.abort();
+          await run.catch(() => undefined);
+          if (pids) killProcessGroup(pids.leader);
+        }
+      });
+    },
+    30_000,
+  );
 });
+
+const activeModel = {
+  id: "active-recipe-test",
+  name: "Active Recipe Test",
+  api: "anthropic-messages",
+  provider: "anthropic",
+  baseUrl: "https://scripted.invalid",
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 100_000,
+  maxTokens: 4096,
+};
+
+async function runActiveToolTurn(session: AgentSession): Promise<void> {
+  let turn = 0;
+  await session.modelRuntime.setRuntimeApiKey("anthropic", "scripted-local-key");
+  session.agent.state.model = activeModel as never;
+  session.agent.streamFunction = (() => {
+    turn += 1;
+    const stopReason = turn === 1 ? "toolUse" : "stop";
+    const message = {
+      role: "assistant",
+      content: turn === 1
+        ? [{ type: "toolCall", id: "active-recipe-call", name: "read", arguments: { path: hooksIndexPath } }]
+        : [{ type: "text", text: "done" }],
+      api: activeModel.api,
+      provider: activeModel.provider,
+      model: activeModel.id,
+      usage: {
+        input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason,
+      timestamp: Date.now(),
+    };
+    return {
+      async *[Symbol.asyncIterator]() {
+        yield { type: "start", partial: message };
+        yield { type: "done", reason: stopReason, message };
+      },
+      result: async () => message,
+    };
+  }) as never;
+  await session.prompt("start the Recipe");
+}
+
+function activeProcessTreeScript(handshakeFile: string): string {
+  return `
+const { spawn } = require("node:child_process");
+const { writeFileSync } = require("node:fs");
+const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+writeFileSync(${JSON.stringify(handshakeFile)}, JSON.stringify({ leader: process.pid, descendant: descendant.pid }));
+setInterval(() => {}, 1000);
+`;
+}
+
+async function readJsonWhenReady(path: string, timeoutMs: number): Promise<{ leader: number; descendant: number }> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try { return JSON.parse(await readFile(path, "utf8")); } catch { await new Promise((resolve) => setTimeout(resolve, 10)); }
+  }
+  throw new Error(`process handshake did not appear within ${timeoutMs}ms`);
+}
+
+async function processGroupId(pid: number): Promise<number> {
+  const { stdout } = await execFileAsync("ps", ["-o", "pgid=", "-p", String(pid)]);
+  return Number(stdout.trim());
+}
+
+function isProcessAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+async function waitForProcessExit(pid: number, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (isProcessAlive(pid) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+  if (isProcessAlive(pid)) throw new Error(`process ${pid} remained alive after ${timeoutMs}ms`);
+}
+
+function killProcessGroup(leader: number): void {
+  try { process.kill(-leader, "SIGKILL"); } catch { /* The group is already gone. */ }
+}

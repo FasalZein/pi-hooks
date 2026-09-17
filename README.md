@@ -95,7 +95,11 @@ Library composers can configure the Action Engine explicitly through `providers`
 }
 ```
 
-Each command receives `{ "event", "sessionId", "payload", "input" }` as JSON on stdin. Commands run in order without a shell. Each Recipe must supply a positive `timeoutMs`; the example selects three seconds. Timeout and cancellation terminate the child's process group where supported. Child programs are trusted and have the same OS permissions as Pi.
+Each command receives `{ "event", "sessionId", "payload", "input" }` as JSON on stdin. Commands run in order without a shell. Each Recipe must supply a positive `timeoutMs`; the example selects three seconds. Every command remains bounded by that timeout.
+
+During an active Pi turn, Pi supplies the turn's cancellation signal to Recipe commands. Aborting that turn cancels the running command. On POSIX systems, timeout and active-turn cancellation terminate the command's process group, including descendants that remain in that group. On Windows, they terminate the direct child; descendant termination is not guaranteed.
+
+Idle and lifecycle events, including `session_start` and `session_shutdown`, normally have no active-turn cancellation signal. Their Recipe commands rely on `timeoutMs`; Pi shutdown does not add a separate Recipe cancellation guarantee. Child programs are trusted and have the same OS permissions as Pi.
 
 Empty stdout means no effect. Otherwise stdout is one effect or an array of effects:
 
