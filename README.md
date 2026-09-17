@@ -18,13 +18,17 @@ Code imports of the package root receive the Bare Host default instead. The Pres
 
 ### Bundled language server
 
-The manifest also loads `@ian-pascoe/pi-lsp` 0.4.4 through the checked settings adapter, plus its skill from this package's dependencies. The LSP extension keeps its own lifecycle outside Host grants. Do not also load a standalone `pi-lsp` extension: both register the same `lsp` tool and command.
+The manifest also loads `@ian-pascoe/pi-lsp` 0.4.4 through the checked settings adapter, plus configuration-correct LSP guidance from this package. The LSP extension keeps its own lifecycle outside Host grants. Do not also load a standalone `pi-lsp` extension: both register the same `lsp` tool and command.
 
-LSP configuration lives under `lsp` in `pi-hooks.jsonc`. Pi settings are not a fallback. Add server definitions by name and set `enabled: false` to disable one. Server executables must already be installed; no catalog or installer runs automatically. Verification requires `tsgo` on PATH for the real TypeScript diagnostics test.
+LSP configuration lives under `lsp` in the global `pi-hooks.jsonc`. Pi settings are not a fallback. Do not add LSP configuration to global or project Pi settings. Add Server Definitions by name. Server executables must already be installed; no catalog or installer runs automatically. Verification requires `tsgo` on PATH for the real TypeScript diagnostics test.
 
-`/lsp disable <server> --global` updates only that server's enablement in `pi-hooks.jsonc`, preserving comments and unrelated fields. Without `--global`, toggles apply to the current session. Project-scoped writes are refused with a remedy. Project Pi settings cannot inject executable LSP definitions.
+A Server Definition can set `enabled: false`. A durable `lsp.enablement` value for the same id overrides that definition value. A session choice overrides both. The complete precedence is **session override → `lsp.enablement` → definition-level `enabled` → enabled by default**.
 
-The dependency patch changes only optional settings reader/writer effects. `npm run prepare:lsp` checks the exact upstream version and source checksum before applying it. Install and packaging scripts run this check; `npm run verify` also runs it. Packed releases already contain the checked patch, including when installed with scripts disabled. Upgrading LSP requires updating the checked patch and rerunning the live tests.
+`/lsp disable <server> --global` updates only that server's `lsp.enablement` value in `pi-hooks.jsonc`. It preserves comments, Server Definitions, unrelated fields, file permissions, and symlink behavior. Without `--global`, toggles apply only to the current session. Interactive choices and completions offer session and global scope only. A manually supplied `--project` argument is refused with a global/session Remedy and does not write a file.
+
+Reload Pi after changing a Server Definition, languages, commands, or timeouts. Global and session enablement commands apply immediately in the current session. Other sessions read durable enablement on startup or reload.
+
+The dependency patch changes only settings integration and `/lsp` command presentation. It does not change protocol or workspace-edit code. `npm run prepare:lsp` checks the exact upstream version and source checksums before applying it. Install and packaging scripts run this check; `npm run verify` also runs it. Packed releases already contain the checked patch, including when installed with scripts disabled. Upgrading LSP requires updating the checked patch and rerunning the live tests.
 
 ## Configuration
 

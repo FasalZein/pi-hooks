@@ -17,14 +17,29 @@ describe('one authoritative LSP configuration', () => {
     const empty = await readLspConfiguration(path);
     expect(empty.getGlobalSettings()).toEqual({ lsp: { servers: {}, enablement: {} } });
     expect(empty.getProjectSettings()).toEqual({});
-    await writeFile(path, '{ "schemaVersion": 2, "lsp": { "servers": { "custom": { "enabled": false, "command": "server" } } } }');
+    await writeFile(path, '{ "schemaVersion": 2, "lsp": { "servers": { "custom": { "enabled": false, "command": "server" } }, "enablement": { "custom": true } } }');
     const reader = await readLspConfiguration(path);
-    expect(reader.getGlobalSettings()).toMatchObject({ lsp: { servers: { custom: { command: 'server' } }, enablement: { custom: false } } });
+    expect(reader.getGlobalSettings()).toMatchObject({ lsp: { servers: { custom: { command: 'server' } }, enablement: { custom: true } } });
     expect(reader.getGlobalSettings().lsp.servers.custom).not.toHaveProperty('enabled');
   }));
 
+  it('passes invalid definition enablement to upstream quarantine without dropping healthy siblings', async () => withFile(async (path) => {
+    await writeFile(path, JSON.stringify({ schemaVersion: 2, lsp: { servers: {
+      broken: { enabled: 'sometimes', command: 'broken', languages: [{ extensions: ['.broken'], languageId: 'broken' }] },
+      healthy: { enabled: true, command: 'healthy', languages: [{ extensions: ['.ts'], languageId: 'typescript' }] },
+    } } }));
+    const reader = await readLspConfiguration(path);
+    expect(reader.getGlobalSettings()).toMatchObject({ lsp: {
+      servers: {
+        broken: { enabled: 'sometimes', command: 'broken' },
+        healthy: { command: 'healthy' },
+      },
+      enablement: { healthy: true },
+    } });
+  }));
+
   it('preserves comments, unrelated fields, permissions, symlinks, and repeated updates', async () => withFile(async (path, dir) => {
-    const text = '\uFEFF{\n  // keep this explanation\n  "schemaVersion": 2,\n  "rendering": false, // plain UI\n  "rules": [{ "id": "danger-01", "enabled": false }],\n  "lsp": { "servers": { "custom": { "command": "server" } } },\n}\n';
+    const text = '\uFEFF{\n  // keep this explanation\n  "schemaVersion": 2,\n  "rendering": false, // plain UI\n  "rules": [{ "id": "danger-01", "enabled": false }],\n  "lsp": {\n    "servers": { "custom": { "command": "server" } },\n    "enablement": { "sibling": true },\n  },\n}\n';
     const real = join(dir, 'actual.jsonc');
     await writeFile(real, text, { mode: 0o640 });
     await symlink(real, path);
@@ -33,6 +48,8 @@ describe('one authoritative LSP configuration', () => {
     expect(updated).toContain('// keep this explanation');
     expect(updated).toContain('// plain UI');
     expect(updated).toContain('"rules": [{ "id": "danger-01", "enabled": false }]');
+    expect(updated).toContain('"command": "server"');
+    expect(updated).toContain('"sibling": true');
     expect(updated.startsWith('\uFEFF')).toBe(true);
     expect((await stat(real)).mode & 0o777).toBe(0o640);
     await writeLspEnablement(path, { scope: 'global', serverId: 'custom', enabled: false });

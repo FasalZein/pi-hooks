@@ -35,15 +35,26 @@ describe("bundled pi-lsp go/no-go", () => {
       for (const resource of [...manifest.pi.extensions, ...manifest.pi.skills.map((path: string) => `${path}/pi-lsp/SKILL.md`)]) {
         expect(await readFile(join(packageDir, resource), "utf8")).not.toBe("");
       }
+      const packedSkill = await readFile(join(packageDir, "skills/pi-lsp/SKILL.md"), "utf8");
+      const packedGuide = await readFile(join(packageDir, "README.md"), "utf8");
+      expect(packedSkill).toContain("pi-hooks.jsonc");
+      expect(packedSkill).toContain("../../README.md");
+      expect(packedSkill).not.toContain("settings.json");
+      expect(packedSkill).not.toContain("project settings");
+      expect(packedGuide).toContain("session override → `lsp.enablement` → definition-level `enabled` → enabled by default");
+      expect(packedGuide).toContain("Reload Pi after changing a Server Definition");
       const fromLsp = createRequire(join(packageDir, "node_modules/@ian-pascoe/pi-lsp/package.json"));
       for (const dependency of ["cross-spawn", "proper-lockfile", "vscode-languageserver-protocol/node"]) {
         expect(fromLsp.resolve(dependency)).toContain(dir);
         console.log(`Bundled dependency: ${dependency} -> ${fromLsp.resolve(dependency)}`);
       }
       await writeFile(join(dir, "settings.json"), JSON.stringify({ packages: [packageDir] }));
-      await writeFile(join(dir, "pi-hooks.jsonc"), "// unified configuration\n" + JSON.stringify({ schemaVersion: 2, lsp: { servers: { typescript: {
-        command: "tsgo", args: ["--lsp", "--stdio"], languages: [{ extensions: [".ts"], languageId: "typescript" }], rootMarkers: ["tsconfig.json"], requireRootMarker: true,
-      } } } }));
+      await writeFile(join(dir, "pi-hooks.jsonc"), "// unified configuration\n" + JSON.stringify({ schemaVersion: 2, lsp: { servers: {
+        broken: { enabled: "sometimes", command: "must-not-run", languages: [{ extensions: [".broken"], languageId: "broken" }] },
+        typescript: {
+          command: "tsgo", args: ["--lsp", "--stdio"], languages: [{ extensions: [".ts"], languageId: "typescript" }], rootMarkers: ["tsconfig.json"], requireRootMarker: true,
+        },
+      } } }));
       await writeFile(join(dir, "tsconfig.json"), JSON.stringify({ compilerOptions: { strict: true, noEmit: true }, include: ["example.ts"] }));
       const file = join(dir, "example.ts");
       await writeFile(file, 'const value: number = "deliberate error";\n');
@@ -52,12 +63,25 @@ describe("bundled pi-lsp go/no-go", () => {
       expect(loader.getExtensions().errors).toEqual([]);
       expect(loader.getSkills().skills.some((skill) => skill.name === "pi-lsp")).toBe(true);
       const { session } = await createAgentSession({ cwd: dir, resourceLoader: loader, sessionManager: SessionManager.inMemory() });
+      const notifications: Array<{ message: string; level: string }> = [];
+      const scopeChoices: string[][] = [];
+      const selectedValues: string[] = [];
       try {
-        await session.bindExtensions({});
+        await session.bindExtensions({ uiContext: {
+          notify: (message: string, level: string) => notifications.push({ message, level }),
+          select: async (_title: string, options: string[]) => {
+            scopeChoices.push(options);
+            const selected = selectedValues.shift();
+            return selected === "<typescript>" ? options.find((option) => option.startsWith("typescript —")) : selected;
+          },
+          setStatus() {},
+        } as never });
+        expect(notifications.some(({ message, level }) => level === "warning" && message.includes("global lsp.servers.broken.enabled"))).toBe(true);
         expect(session.getAllTools().filter((tool) => tool.name === "lsp")).toHaveLength(1);
         expect(session.extensionRunner!.getCommand("lsp")).toBeDefined();
         const status = await callTool(session, "lsp", { operation: "status" });
         expect(JSON.stringify(status.content)).toContain("typescript");
+        expect(JSON.stringify(status.content)).not.toContain("must-not-run");
         const diagnostic = await callTool(session, "lsp", { operation: "diagnostics", file_path: file });
         expect(JSON.stringify(diagnostic.content)).toContain("not assignable");
         await callTool(session, "edit", { path: file, edits: [{ oldText: '"deliberate error"', newText: "42" }] });
@@ -66,6 +90,19 @@ describe("bundled pi-lsp go/no-go", () => {
         expect(await readFile(file, "utf8")).toContain('"another error"');
         const runner = session.extensionRunner!;
         const lspCommand = runner.getCommand("lsp")!;
+        const beforeCommandStatus = notifications.length;
+        await lspCommand.handler("status", runner.createContext() as never);
+        expect(notifications.slice(beforeCommandStatus).some(({ message }) => message.includes("typescript —"))).toBe(true);
+        const completions = await lspCommand.getArgumentCompletions?.("disable typescript ");
+        expect(completions?.map(({ label }) => label)).toEqual(["--global"]);
+        selectedValues.push("<typescript>", "disable", "session");
+        await lspCommand.handler("", runner.createContext() as never);
+        expect(scopeChoices).toContainEqual(["session", "global"]);
+        const beforeProject = await readFile(join(dir, "pi-hooks.jsonc"), "utf8");
+        const projectNotification = notifications.length;
+        await lspCommand.handler("disable typescript --project", runner.createContext() as never);
+        expect(await readFile(join(dir, "pi-hooks.jsonc"), "utf8")).toBe(beforeProject);
+        expect(notifications.slice(projectNotification).some(({ message }) => message.includes("Use --global or a session-scoped LSP toggle"))).toBe(true);
         await lspCommand.handler("disable typescript --global", runner.createContext() as never);
         const disabled = await readFile(join(dir, "pi-hooks.jsonc"), "utf8");
         expect(disabled).toContain("// unified configuration");

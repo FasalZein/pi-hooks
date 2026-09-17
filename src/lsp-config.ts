@@ -13,7 +13,10 @@ export async function readLspConfiguration(path: string) {
   for (const [id, definition] of Object.entries(definitions)) {
     if (definition === null) continue;
     const { enabled, ...server } = definition;
-    if (enabled !== undefined && typeof enabled !== 'boolean') throw new Error(`LSP server ${id}: enabled must be boolean`);
+    if (enabled !== undefined && typeof enabled !== 'boolean') {
+      servers[id] = definition;
+      continue;
+    }
     if (enabled !== undefined && enablement[id] === undefined) enablement[id] = enabled;
     servers[id] = server;
   }

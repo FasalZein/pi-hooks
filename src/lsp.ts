@@ -9,4 +9,5 @@ export default createPiLspExtension({
   getAgentDirectory: getAgentDir,
   readSettings: () => readLspConfiguration(join(getAgentDir(), 'pi-hooks.jsonc')),
   writeEnablement: (input) => writeLspEnablement(join(getAgentDir(), 'pi-hooks.jsonc'), input),
+  persistenceScopes: ['global'],
 });

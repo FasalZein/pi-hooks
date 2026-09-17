@@ -1,28 +1,69 @@
 {
   "version": "0.4.4",
-  "originalSha256": "741e02974125adb22534e17cb1490a857e7655d530ef720d339a3f126f166eb4",
-  "patchedSha256": "1acd9f08fba9011d8771e0af9ee844700bf1b373cb947fc3efe2998ed14c7f74",
-  "replacements": [
-    [
-      "  getAgentDirectory(): string;",
-      "  getAgentDirectory(): string;\n  /** pi-hooks optional adapter, defaults retain upstream behavior. */\n  readSettings?(context: ExtensionContext): LspSettingsReader | Promise<LspSettingsReader>;\n  writeEnablement?: typeof writeLspEnablement;"
-    ],
-    [
-      "import { resolveLspSettings, type LspServerEnablement }",
-      "import { resolveLspSettings, type LspServerEnablement, type LspSettingsReader }"
-    ],
-    [
-      "    const settingsManager = SettingsManager.create(context.cwd, this.effects.getAgentDirectory(), {\n      projectTrusted: context.isProjectTrusted(),\n    });",
-      "    const settingsManager = this.effects.readSettings\n      ? await this.effects.readSettings(context)\n      : SettingsManager.create(context.cwd, this.effects.getAgentDirectory(), {\n        projectTrusted: context.isProjectTrusted(),\n      });"
-    ],
-    [
-      "        await writeLspEnablement({",
-      "        await (this.effects.writeEnablement ?? writeLspEnablement)({"
-    ],
-    [
-      "          SettingsManager.create(session.cwd, this.effects.getAgentDirectory(), {\n            projectTrusted: context.isProjectTrusted(),\n          }),",
-      "          this.effects.readSettings\n            ? await this.effects.readSettings(context)\n            : SettingsManager.create(session.cwd, this.effects.getAgentDirectory(), {\n              projectTrusted: context.isProjectTrusted(),\n            }),"
-    ]
-  ],
-  "suffix": "\n/** Checked by pi-hooks before loading the settings adapter. */\nexport const PI_HOOKS_SETTINGS_API = 1;\n"
+  "files": [
+    {
+      "path": "src/pi-lsp-extension.ts",
+      "replacements": [
+        [
+          "  getAgentDirectory(): string;",
+          "  getAgentDirectory(): string;\n  /** pi-hooks optional adapter, defaults retain upstream behavior. */\n  readSettings?(context: ExtensionContext): LspSettingsReader | Promise<LspSettingsReader>;\n  writeEnablement?: typeof writeLspEnablement;\n  persistenceScopes?: readonly (\"global\" | \"project\")[];"
+        ],
+        [
+          "import { resolveLspSettings, type LspServerEnablement }",
+          "import { resolveLspSettings, type LspServerEnablement, type LspSettingsReader }"
+        ],
+        [
+          "        completeLspCommandArguments(prefix, this.session?.manager),",
+          "        completeLspCommandArguments(prefix, this.session?.manager, this.effects.persistenceScopes),"
+        ],
+        [
+          "    const settingsManager = SettingsManager.create(context.cwd, this.effects.getAgentDirectory(), {\n      projectTrusted: context.isProjectTrusted(),\n    });",
+          "    const settingsManager = this.effects.readSettings\n      ? await this.effects.readSettings(context)\n      : SettingsManager.create(context.cwd, this.effects.getAgentDirectory(), {\n        projectTrusted: context.isProjectTrusted(),\n      });"
+        ],
+        [
+          "      if (args.trim() === \"\" && !context.hasUI) {",
+          "      if ((args.trim() === \"\" && !context.hasUI) || args.trim() === \"status\") {"
+        ],
+        [
+          "          ? await selectLspCommand(session.manager, context, isCurrent)",
+          "          ? await selectLspCommand(session.manager, context, isCurrent, this.effects.persistenceScopes)"
+        ],
+        [
+          "        await writeLspEnablement({",
+          "        await (this.effects.writeEnablement ?? writeLspEnablement)({"
+        ],
+        [
+          "          SettingsManager.create(session.cwd, this.effects.getAgentDirectory(), {\n            projectTrusted: context.isProjectTrusted(),\n          }),",
+          "          this.effects.readSettings\n            ? await this.effects.readSettings(context)\n            : SettingsManager.create(session.cwd, this.effects.getAgentDirectory(), {\n              projectTrusted: context.isProjectTrusted(),\n            }),"
+        ]
+      ],
+      "suffix": "\n/** Checked by pi-hooks before loading the settings adapter. */\nexport const PI_HOOKS_SETTINGS_API = 1;\n",
+      "originalSha256": "741e02974125adb22534e17cb1490a857e7655d530ef720d339a3f126f166eb4",
+      "patchedSha256": "330af1bffd3131aa4c942edb59d199e7cfbce0905fa345678c621527b1ea27bf"
+    },
+    {
+      "path": "src/lsp-command.ts",
+      "replacements": [
+        [
+          "  isCurrent: () => boolean,\n): Promise<LspCommand | undefined> {",
+          "  isCurrent: () => boolean,\n  persistenceScopes: readonly (\"global\" | \"project\")[] = [\"global\", \"project\"],\n): Promise<LspCommand | undefined> {"
+        ],
+        [
+          "  const scope = await context.ui.select(`${action} ${server.serverId}: scope`, [\n    \"session\",\n    \"project\",\n    \"global\",\n  ]);",
+          "  const scope = await context.ui.select(`${action} ${server.serverId}: scope`, [\n    \"session\",\n    ...persistenceScopes,\n  ]);"
+        ],
+        [
+          "  manager: CommandStatusManager | undefined,\n): AutocompleteItem[] | null {",
+          "  manager: CommandStatusManager | undefined,\n  persistenceScopes: readonly (\"global\" | \"project\")[] = [\"global\", \"project\"],\n): AutocompleteItem[] | null {"
+        ],
+        [
+          ": [\"--global\", \"--project\"];",
+          ": persistenceScopes.map((scope) => `--${scope}`);"
+        ]
+      ],
+      "suffix": "",
+      "originalSha256": "8c4460de6c33f8e6392c8a3f739c6a3b109b349de5367a61bf8054d8b21d8bc7",
+      "patchedSha256": "b3b240e122d2d8ead6fec88bf0f18323a82fbcec22469b4c1795a07f81d905b2"
+    }
+  ]
 }

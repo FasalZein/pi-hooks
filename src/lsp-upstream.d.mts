@@ -5,4 +5,5 @@ export function createPiLspExtension(effects: {
   getAgentDirectory(): string;
   readSettings(context: ExtensionContext): Promise<{ getGlobalSettings(): Record<string, unknown>; getProjectSettings(): Record<string, unknown> }>;
   writeEnablement(input: { scope: 'global' | 'project'; serverId: string; enabled: boolean; agentDirectory: string; cwd: string; projectTrusted: boolean }): Promise<void>;
+  persistenceScopes?: readonly ('global' | 'project')[];
 }): ExtensionFactory;

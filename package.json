@@ -13,7 +13,8 @@
     "schema",
     "examples",
     "README.md",
-    "scripts"
+    "scripts",
+    "skills"
   ],
   "keywords": [
     "pi-package",
@@ -36,7 +37,7 @@
       "./src/lsp.ts"
     ],
     "skills": [
-      "./node_modules/@ian-pascoe/pi-lsp/skills"
+      "./skills"
     ]
   },
   "bundledDependencies": [
