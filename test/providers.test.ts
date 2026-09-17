@@ -9,6 +9,12 @@ import { loadGlobalConfig } from "../src/config.js";
 
 const hooksIndexPath = fileURLToPath(new URL("../src/index.ts", import.meta.url));
 
+async function providerStatus(session: AgentSession) {
+  const notices: string[] = [];
+  await session.extensionRunner!.getCommand("hooks")!.handler("status", { ui: { notify: (text: string) => notices.push(text) } } as never);
+  return JSON.parse(notices[0]);
+}
+
 async function withProviderSession<T>(
   options: { config: string; extensionSource: string },
   run: (session: AgentSession, agentDir: string) => Promise<T>,
@@ -202,7 +208,13 @@ describe("SLICE-0009 AC2: manifest and config-schema validation isolates a provi
 
       const lines = (await readFile(auditPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
       const failure = lines.find((line) => line.provider === "bad-config" && line.decision === "module-failure");
-      expect(failure).toBeDefined();
+      expect(failure).toMatchObject({ provider: "bad-config", decision: "module-failure" });
+      expect((await providerStatus(session)).providers).toContainEqual(expect.objectContaining({
+        id: "bad-config",
+        enabled: false,
+        health: "degraded",
+        lastFailure: "config invalid: /threshold: must be number",
+      }));
     });
   }, 30_000);
 

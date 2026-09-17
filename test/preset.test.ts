@@ -115,13 +115,16 @@ describe("path-installed Preset", () => {
       rules: [{ id: "healthy-policy", match: { tool: "bash" }, decision: "deny", scope: "test", remedy: "use another tool" }],
     }), async (session, dir) => {
       const status = await hooksStatus(session);
+      const expectedFailure = id === "duplicate"
+        ? "activation failed: Recipe duplicate: duplicate id"
+        : "config invalid: entry broken /recipes/0/timeoutMs: must be >= 1";
       expect(status).toMatchObject({
         activation: "active",
         configuration: { health: "valid" },
-        runtime: { health: "degraded", lastFailure: expect.stringContaining(id) },
+        runtime: { health: "degraded", lastFailure: `provider action-engine ${expectedFailure}` },
         providers: [
           expect.objectContaining({ id: "policy-engine", enabled: true, health: "healthy" }),
-          expect.objectContaining({ id: "action-engine", enabled: false, health: "degraded", lastFailure: expect.stringContaining(id) }),
+          expect.objectContaining({ id: "action-engine", enabled: false, health: "degraded", lastFailure: expectedFailure }),
         ],
       });
       expect(await session.extensionRunner!.emitToolCall({ type: "tool_call", toolName: "bash", toolCallId: id, input: { command: "echo protected" } })).toMatchObject({ block: true, reason: expect.stringContaining("healthy-policy") });
@@ -129,6 +132,28 @@ describe("path-installed Preset", () => {
       expect(audit).toContain('"provider":"action-engine"');
       expect(audit).toContain('"decision":"module-failure"');
       expect(audit).not.toContain('"decision":"inactive"');
+    });
+  });
+
+  it.each([
+    ["root-level config", "invalid", "/: must be object"],
+    ["multiple Recipe fields", { recipes: [{ ...recipe("multi", "multi.txt"), event: "", timeoutMs: 0 }] }, "entry multi /recipes/0/event: must not have fewer than 1 characters; entry multi /recipes/0/timeoutMs: must be >= 1"],
+    ["non-string Recipe id", { recipes: [{ ...recipe("ignored", "number-id.txt"), id: 7 }] }, "/recipes/0/id: must be string"],
+  ])("preserves %s Action Engine validation diagnostics", async (_case, actionConfig, expectedFailure) => {
+    await withInstalledPreset(JSON.stringify({
+      schemaVersion: 2,
+      providers: [{ id: "action-engine", required: false, config: actionConfig }],
+      rules: [{ id: "healthy-policy", match: { tool: "bash" }, decision: "deny", scope: "test", remedy: "use another tool" }],
+    }), async (session) => {
+      expect(await hooksStatus(session)).toMatchObject({
+        activation: "active",
+        runtime: { health: "degraded", lastFailure: `provider action-engine config invalid: ${expectedFailure}` },
+        providers: [
+          expect.objectContaining({ id: "policy-engine", enabled: true, health: "healthy" }),
+          expect.objectContaining({ id: "action-engine", enabled: false, health: "degraded", lastFailure: `config invalid: ${expectedFailure}` }),
+        ],
+      });
+      expect(await session.extensionRunner!.emitToolCall({ type: "tool_call", toolName: "bash", toolCallId: "invalid-explicit", input: { command: "echo protected" } })).toMatchObject({ block: true, reason: expect.stringContaining("healthy-policy") });
     });
   });
 
@@ -167,6 +192,21 @@ describe("path-installed Preset", () => {
         providers: [],
       });
       expect(await session.extensionRunner!.emitToolCall({ type: "tool_call", toolName: "bash", toolCallId: "inactive", input: { command: "rm file" } })).toBeUndefined();
+    });
+  });
+
+  it("keeps duplicate explicit Provider entries as an invalid whole configuration", async () => {
+    await withInstalledPreset(JSON.stringify({
+      schemaVersion: 2,
+      providers: [{ id: "action-engine" }, { id: "action-engine" }],
+    }), async (session) => {
+      expect(await hooksStatus(session)).toMatchObject({
+        activation: "inactive",
+        configuration: { health: "invalid", lastFailure: "Duplicate Provider configuration: action-engine" },
+        runtime: { health: "healthy" },
+        providers: [],
+      });
+      expect(await session.extensionRunner!.emitToolCall({ type: "tool_call", toolName: "bash", toolCallId: "duplicate-provider", input: { command: "rm file" } })).toBeUndefined();
     });
   });
 
