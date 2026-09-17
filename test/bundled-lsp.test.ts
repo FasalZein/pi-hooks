@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,18 +11,34 @@ import { describe, expect, it } from "vitest";
 const exec = promisify(execFile);
 const root = fileURLToPath(new URL("..", import.meta.url));
 
-async function callTool(session: AgentSession, name: string, input: Record<string, unknown>) {
+async function callTool(
+  session: AgentSession,
+  name: string,
+  input: Record<string, unknown>,
+  signal?: AbortSignal,
+) {
   const runner = session.extensionRunner!;
-  const event = { type: "tool_call", toolName: name, toolCallId: `live-${name}`, input };
-  expect(await runner.emitToolCall(event as never)).toBeUndefined();
-  const result = await session.getToolDefinition(name)!.execute(event.toolCallId, input, undefined, undefined, runner.createContext());
-  const patch = await runner.emitToolResult({ type: "tool_result", toolName: name, toolCallId: event.toolCallId, input, ...result, isError: false } as never);
+  const tool = session.getToolDefinition(name)!;
+  const prepared = tool.prepareArguments?.(input) ?? input;
+  const event = { type: "tool_call", toolName: name, toolCallId: `live-${name}-${Math.random()}`, input: prepared };
+  const boundaryResult = await runner.emitToolCall(event as never);
+  expect(boundaryResult, JSON.stringify(boundaryResult)).toBeUndefined();
+  const result = await tool.execute(event.toolCallId, event.input, signal, undefined, runner.createContext());
+  const patch = await runner.emitToolResult({ type: "tool_result", toolName: name, toolCallId: event.toolCallId, input: event.input, ...result, isError: false } as never);
   return { ...result, ...patch };
+}
+
+async function prepareToolCall(session: AgentSession, name: string, input: Record<string, unknown>) {
+  const tool = session.getToolDefinition(name)!;
+  const prepared = tool.prepareArguments?.(input) ?? input;
+  const event = { type: "tool_call", toolName: name, toolCallId: `live-${name}-${Math.random()}`, input: prepared };
+  const boundaryResult = await session.extensionRunner!.emitToolCall(event as never);
+  return { tool, event, boundaryResult };
 }
 
 describe("bundled pi-lsp go/no-go", () => {
   it("loads one packed LSP, resolves its dependencies, and attaches live TypeScript diagnostics after edit", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "pi-hooks-lsp-bundle-"));
+    const dir = await mkdtemp(join(await realpath(tmpdir()), "pi-hooks-lsp-bundle-"));
     const previous = process.env.PI_CODING_AGENT_DIR;
     process.env.PI_CODING_AGENT_DIR = dir;
     try {
@@ -30,6 +46,8 @@ describe("bundled pi-lsp go/no-go", () => {
       const [{ filename }] = JSON.parse(stdout);
       await exec("npm", ["install", join(dir, filename), "--ignore-scripts", "--legacy-peer-deps", "--omit=peer", "--no-audit", "--no-fund"], { cwd: dir });
       const packageDir = join(dir, "node_modules/@tothemoon/pi-hooks");
+      const { stdout: tsgoVersion } = await exec("tsgo", ["--version"]);
+      expect(tsgoVersion).toContain("7.0.0-dev.20260707.2");
       const manifest = JSON.parse(await readFile(join(packageDir, "package.json"), "utf8"));
       expect(manifest.dependencies["@ian-pascoe/pi-lsp"]).toBe("0.4.4");
       for (const resource of [...manifest.pi.extensions, ...manifest.pi.skills.map((path: string) => `${path}/pi-lsp/SKILL.md`)]) {
@@ -49,13 +67,23 @@ describe("bundled pi-lsp go/no-go", () => {
         console.log(`Bundled dependency: ${dependency} -> ${fromLsp.resolve(dependency)}`);
       }
       await writeFile(join(dir, "settings.json"), JSON.stringify({ packages: [packageDir] }));
-      await writeFile(join(dir, "pi-hooks.jsonc"), "// unified configuration\n" + JSON.stringify({ schemaVersion: 2, lsp: { servers: {
-        broken: { enabled: "sometimes", command: "must-not-run", languages: [{ extensions: [".broken"], languageId: "broken" }] },
-        typescript: {
-          command: "tsgo", args: ["--lsp", "--stdio"], languages: [{ extensions: [".ts"], languageId: "typescript" }], rootMarkers: ["tsconfig.json"], requireRootMarker: true,
-        },
-      } } }));
-      await writeFile(join(dir, "tsconfig.json"), JSON.stringify({ compilerOptions: { strict: true, noEmit: true }, include: ["example.ts"] }));
+      await writeFile(join(dir, "pi-hooks.jsonc"), "// unified configuration\n" + JSON.stringify({
+        schemaVersion: 2,
+        providers: [{ id: "policy-engine", enabled: true, config: { rules: [{
+          id: "approve-lsp-apply",
+          match: { tool: "lsp", input: { operation: { equals: "apply" } } },
+          decision: "ask",
+          scope: "workspace edit",
+          remedy: "reject the preview",
+        }] } }],
+        lsp: { servers: {
+          broken: { enabled: "sometimes", command: "must-not-run", languages: [{ extensions: [".broken"], languageId: "broken" }] },
+          typescript: {
+            command: "tsgo", args: ["--lsp", "--stdio"], languages: [{ extensions: [".ts"], languageId: "typescript" }], rootMarkers: ["tsconfig.json"], requireRootMarker: true,
+          },
+        } },
+      }));
+      await writeFile(join(dir, "tsconfig.json"), JSON.stringify({ compilerOptions: { strict: true, noEmit: true }, include: ["**/*.ts"] }));
       const file = join(dir, "example.ts");
       await writeFile(file, 'const value: number = "deliberate error";\n');
       const loader = new DefaultResourceLoader({ cwd: dir, agentDir: dir, noPromptTemplates: true, noThemes: true, noContextFiles: true });
@@ -66,15 +94,32 @@ describe("bundled pi-lsp go/no-go", () => {
       const notifications: Array<{ message: string; level: string }> = [];
       const scopeChoices: string[][] = [];
       const selectedValues: string[] = [];
+      const approvalPrompts: string[] = [];
+      const approvalAnswers: boolean[] = [];
       try {
-        await session.bindExtensions({ uiContext: {
+        await session.bindExtensions({ mode: "rpc", uiContext: {
           notify: (message: string, level: string) => notifications.push({ message, level }),
+          confirm: async (_title: string, message: string) => {
+            approvalPrompts.push(message);
+            return approvalAnswers.shift() ?? false;
+          },
           select: async (_title: string, options: string[]) => {
             scopeChoices.push(options);
             const selected = selectedValues.shift();
             return selected === "<typescript>" ? options.find((option) => option.startsWith("typescript —")) : selected;
           },
+          input: async () => undefined,
+          onTerminalInput: () => () => undefined,
           setStatus() {},
+          setWorkingMessage() {},
+          setWorkingVisible() {},
+          setWorkingIndicator() {},
+          setHiddenThinkingLabel() {},
+          setWidget() {},
+          setFooter() {},
+          setHeader() {},
+          setTitle() {},
+          custom: async () => undefined,
         } as never });
         expect(notifications.some(({ message, level }) => level === "warning" && message.includes("global lsp.servers.broken.enabled"))).toBe(true);
         expect(session.getAllTools().filter((tool) => tool.name === "lsp")).toHaveLength(1);
@@ -88,6 +133,97 @@ describe("bundled pi-lsp go/no-go", () => {
         const edit = await callTool(session, "edit", { path: file, edits: [{ oldText: "42", newText: '"another error"' }] });
         expect(JSON.stringify(edit.content)).toContain("not assignable");
         expect(await readFile(file, "utf8")).toContain('"another error"');
+
+        const capabilities = await callTool(session, "lsp", { operation: "capabilities", server_id: "typescript", file_path: file });
+        expect(JSON.stringify(capabilities.content)).toContain("documentFormattingProvider");
+        expect(JSON.stringify(capabilities.content)).toContain("renameProvider");
+        await expect(callTool(session, "lsp", { operation: "document_colors", file_path: file, server_id: "typescript" }))
+          .rejects.toThrow("server typescript does not support the requested operation");
+
+        const unformatted = 'const value:number="another error"\n';
+        await writeFile(file, unformatted);
+        const formatPreview = await callTool(session, "lsp", {
+          operation: "format_document", file_path: file, server_id: "typescript", tab_size: 2, insert_spaces: true,
+        });
+        const formatDetails = formatPreview.details as { preview_id: string; mutation_manifest: unknown[]; state: string };
+        expect(formatDetails.state).toBe("available");
+        expect(formatDetails.mutation_manifest).toEqual([expect.objectContaining({ operation: "modify", path: expect.stringMatching(/example\.ts$/) })]);
+        expect(await readFile(file, "utf8")).toBe(unformatted);
+        approvalAnswers.push(true);
+        const formatApply = await callTool(session, "lsp", { operation: "apply", preview_id: formatDetails.preview_id });
+        const formatted = await readFile(file, "utf8");
+        expect(formatted).not.toBe(unformatted);
+        expect(formatted).toContain('const value: number = "another error"');
+        expect(JSON.stringify(formatApply.content)).toContain("LSP diagnostics");
+        expect(approvalPrompts.at(-1)).toContain("example.ts");
+
+        await writeFile(file, unformatted);
+        const deniedPreview = await callTool(session, "lsp", {
+          operation: "format_document", file_path: file, server_id: "typescript", tab_size: 2, insert_spaces: true,
+        });
+        const deniedId = (deniedPreview.details as { preview_id: string }).preview_id;
+        approvalAnswers.push(false);
+        const denied = await prepareToolCall(session, "lsp", { operation: "apply", preview_id: deniedId });
+        expect(denied.boundaryResult).toMatchObject({ block: true, reason: expect.stringContaining("approve-lsp-apply") });
+        expect(await readFile(file, "utf8")).toBe(unformatted);
+
+        approvalAnswers.push(true);
+        const changedManifest = await prepareToolCall(session, "lsp", { operation: "apply", preview_id: deniedId });
+        expect(changedManifest.boundaryResult).toBeUndefined();
+        expect(changedManifest.event.input).toMatchObject({ mutation_manifest: [{ operation: "modify", path: expect.stringMatching(/example\.ts$/) }] });
+        (changedManifest.event.input as Record<string, unknown>).mutation_manifest = [];
+        await expect(changedManifest.tool.execute(
+          changedManifest.event.toolCallId,
+          changedManifest.event.input,
+          undefined,
+          undefined,
+          session.extensionRunner!.createContext(),
+        )).rejects.toThrow("Mutation Manifest changed after argument preparation");
+        expect(await readFile(file, "utf8")).toBe(unformatted);
+
+        const cancelledPreview = await callTool(session, "lsp", {
+          operation: "format_document", file_path: file, server_id: "typescript", tab_size: 2, insert_spaces: true,
+        });
+        const cancelledId = (cancelledPreview.details as { preview_id: string }).preview_id;
+        const cancellation = new AbortController();
+        cancellation.abort();
+        approvalAnswers.push(true);
+        await expect(callTool(session, "lsp", { operation: "apply", preview_id: cancelledId }, cancellation.signal))
+          .rejects.toThrow("Workspace Edit cancelled before its first mutation");
+        expect(await readFile(file, "utf8")).toBe(unformatted);
+
+        const firstDir = join(dir, "a");
+        const secondDir = join(dir, "z");
+        await mkdir(firstDir);
+        await mkdir(secondDir);
+        const firstFile = join(firstDir, "first.ts");
+        const secondFile = join(secondDir, "second.ts");
+        const firstOriginal = "export const sharedName: number = 1;\n";
+        const secondOriginal = 'import { sharedName } from "../a/first";\nexport const answer = sharedName;\n';
+        await writeFile(firstFile, firstOriginal);
+        await writeFile(secondFile, secondOriginal);
+        const preparedRename = await callTool(session, "lsp", {
+          operation: "prepare_rename", file_path: firstFile, server_id: "typescript", line: 1, character: 14,
+        });
+        expect(JSON.stringify(preparedRename.content)).toContain("sharedName");
+        const renamePreview = await callTool(session, "lsp", {
+          operation: "rename", file_path: firstFile, server_id: "typescript", line: 1, character: 14, new_name: "renamedValue",
+        });
+        const renameDetails = renamePreview.details as { preview_id: string; mutation_manifest: Array<{ path: string }> };
+        expect(renameDetails.mutation_manifest.map(({ path }) => path.replace(/^.*\/(a|z)\//, "$1/")).sort()).toEqual(["a/first.ts", "z/second.ts"]);
+        expect(await readFile(firstFile, "utf8")).toBe(firstOriginal);
+        expect(await readFile(secondFile, "utf8")).toBe(secondOriginal);
+        await chmod(secondDir, 0o555);
+        try {
+          approvalAnswers.push(true);
+          await expect(callTool(session, "lsp", { operation: "apply", preview_id: renameDetails.preview_id }))
+            .rejects.toThrow("Workspace Edit failed and was rolled back");
+        } finally {
+          await chmod(secondDir, 0o755);
+        }
+        expect(await readFile(firstFile, "utf8")).toBe(firstOriginal);
+        expect(await readFile(secondFile, "utf8")).toBe(secondOriginal);
+
         const runner = session.extensionRunner!;
         const lspCommand = runner.getCommand("lsp")!;
         const beforeCommandStatus = notifications.length;
