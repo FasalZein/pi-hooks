@@ -93,6 +93,11 @@ describe("bundled pi-lsp go/no-go", () => {
         const beforeCommandStatus = notifications.length;
         await lspCommand.handler("status", runner.createContext() as never);
         expect(notifications.slice(beforeCommandStatus).some(({ message }) => message.includes("typescript —"))).toBe(true);
+        const beforeHeadlessChoices = scopeChoices.length;
+        const headlessContext = runner.createContext();
+        Object.defineProperty(headlessContext, "hasUI", { value: false });
+        await lspCommand.handler("", headlessContext as never);
+        expect(scopeChoices).toHaveLength(beforeHeadlessChoices);
         const completions = await lspCommand.getArgumentCompletions?.("disable typescript ");
         expect(completions?.map(({ label }) => label)).toEqual(["--global"]);
         selectedValues.push("<typescript>", "disable", "session");

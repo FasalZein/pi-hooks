@@ -40,6 +40,15 @@ describe('one authoritative LSP configuration', () => {
     expect(reader.getGlobalSettings().lsp.servers).not.toHaveProperty('removed');
   }));
 
+  it('creates a secure global configuration but refuses an empty server id', async () => withFile(async (path) => {
+    await writeLspEnablement(path, { scope: 'global', serverId: 'typescript', enabled: false });
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    expect(await readFile(path, 'utf8')).toContain('"typescript": false');
+    const created = await readFile(path, 'utf8');
+    await expect(writeLspEnablement(path, { scope: 'global', serverId: '  ', enabled: true })).rejects.toThrow('LSP server id must not be empty');
+    expect(await readFile(path, 'utf8')).toBe(created);
+  }));
+
   it('preserves comments, unrelated fields, permissions, symlinks, and repeated updates', async () => withFile(async (path, dir) => {
     const text = '\uFEFF{\n  // keep this explanation\n  "schemaVersion": 2,\n  "rendering": false, // plain UI\n  "rules": [{ "id": "danger-01", "enabled": false }],\n  "lsp": {\n    "servers": { "custom": { "command": "server" } },\n    "enablement": { "sibling": true },\n  },\n}\n';
     const real = join(dir, 'actual.jsonc');
