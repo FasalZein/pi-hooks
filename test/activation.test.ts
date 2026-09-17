@@ -113,6 +113,22 @@ describe("ADR-001 activation at the real Pi boundary", () => {
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 
+  it("refuses command execution during Provider activation before rollback", async () => {
+    const config = JSON.stringify({ schemaVersion: 2, providers: [{ id: "early-process" }] });
+    const source = `import { createPiHooksExtension, defineProvider } from ${JSON.stringify(entry)};
+      export default createPiHooksExtension({ providers: [defineProvider({
+        manifest: { id: "early-process", version: "1", grants: ["process"] },
+        async activate(f) {
+          await f.process.run({ command: process.execPath, args: ["-e", "require('fs').writeFileSync('escaped','yes')"], cwd: process.env.PI_CODING_AGENT_DIR, stdin: "{}", timeoutMs: 3000 });
+          throw new Error("later activation failure");
+        }
+      })] });`;
+    await withSession(config, source, async (session, dir) => {
+      expect(await status(session)).toMatchObject({ activation: "inactive" });
+      await expect(readFile(join(dir, "escaped"))).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
   it("reports unreadable configuration separately from a missing file", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-hooks-unreadable-"));
     try {

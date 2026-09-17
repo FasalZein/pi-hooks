@@ -110,6 +110,7 @@ export async function createHookHost(options: CreateHookHostOptions = {}): Promi
     modules = [];
     phaseOrder = emptyPhaseOrder();
   }
+  if (activation) activation.runtime.active = activationFailure === undefined;
   const host = new Host(configPath, config, modules, phaseOrder, required, audit, failure, activation, interaction, activationFailure, preparationFailures, options.preset);
   if (activationFailure) await host.recordInactive(activationFailure);
   return host;

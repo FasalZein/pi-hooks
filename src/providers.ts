@@ -50,6 +50,7 @@ export interface UiOp {
 }
 
 export interface ProviderActivation {
+  runtime: { active: boolean };
   /** events-grant contributions merged into the module dispatch path. */
   modules: HookModule[];
   /** Requiredness per contributed module id, inherited from its provider entry. */
@@ -81,6 +82,7 @@ export async function activateProviders(
   for (const entry of config.providers) authorized.set(entry.id, entry);
 
   const activation: ProviderActivation = {
+    runtime: { active: false },
     modules: [],
     requiredByModuleId: new Map(),
     providerByModuleId: new Map(),
@@ -132,7 +134,7 @@ export async function activateProviders(
       // commit to shared state only if activate() completes. A provider that
       // registers and then throws leaves nothing behind.
       const staged = emptyActivation();
-      const wiring = collectingWiring(current, staged, interaction);
+      const wiring = collectingWiring(current, staged, interaction, activation.runtime);
       // Refusals are security events: record them on the committed log immediately
       // so they survive an activation rollback (the refusal proxy throws after).
       const refuse = (grant: GrantKind, methodName: string): void => {
@@ -209,6 +211,7 @@ function validateSnapshot(snapshot: ManifestSnapshot, provider: AnyCapabilityPro
 
 function emptyActivation(): ProviderActivation {
   return {
+    runtime: { active: false },
     modules: [],
     requiredByModuleId: new Map(),
     providerByModuleId: new Map(),
@@ -240,7 +243,7 @@ function validateProviderConfig(schema: TSchema | undefined, config: unknown): s
   return errors.join("; ") || "does not match provider config schema";
 }
 
-function collectingWiring(prepared: PreparedProvider, activation: ProviderActivation, interaction: InteractionGrant): GrantWiring {
+function collectingWiring(prepared: PreparedProvider, activation: ProviderActivation, interaction: InteractionGrant, runtime: { active: boolean }): GrantWiring {
   const providerId = prepared.id;
   return {
     events: {
@@ -253,7 +256,13 @@ function collectingWiring(prepared: PreparedProvider, activation: ProviderActiva
     },
     tools: { registerTool: (tool) => activation.tools.push({ providerId, tool }) },
     commands: { registerCommand: (name, command) => activation.commands.push({ providerId, name, command }) },
-    process: { spawn: (spec) => activation.processes.push({ providerId, spec }), run: runProcess },
+    process: {
+      spawn: (spec) => activation.processes.push({ providerId, spec }),
+      run: (spec) => {
+        if (!runtime.active || !prepared.enabled) return Promise.reject(new Error("Process execution requires an activated Host and Provider"));
+        return runProcess(spec);
+      },
+    },
     ui: {
       setStatus: (key, text) => activation.uiOps.push({ providerId, kind: "status", key, text }),
       setWidget: (key, lines) => activation.uiOps.push({ providerId, kind: "widget", key, lines }),

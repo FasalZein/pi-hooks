@@ -3,6 +3,7 @@ import type { ProcessRunSpec } from "./grants.js";
 
 /** Fixed argv and stdin only. A Recipe supplies its own positive timeout. */
 export function runProcess(spec: ProcessRunSpec): Promise<string> {
+  if (spec.signal?.aborted) return Promise.reject(new Error("command aborted"));
   return new Promise((resolve, reject) => {
     const child = spawn(spec.command, [...(spec.args ?? [])], {
       cwd: spec.cwd, shell: false, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"],
