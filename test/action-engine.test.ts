@@ -9,18 +9,29 @@ import { EVENT_TYPES } from "../src/types.js";
 import { runProcess } from "../src/process-runner.js";
 
 const entry = fileURLToPath(new URL("../src/preset.ts", import.meta.url));
+const hooksIndexPath = fileURLToPath(new URL("../src/index.ts", import.meta.url));
 const command = (script: string) => ({ command: process.execPath, args: ["-e", script] });
 const recipe = (id: string, event: string, script: string, extra: Partial<Recipe> = {}): Recipe => ({ id, event, commands: [command(script)], timeoutMs: 3000, ...extra });
 
-async function withRecipes(recipes: unknown[], run: (session: AgentSession, dir: string) => Promise<void>, policyRules: unknown[] = []) {
+async function withRecipes(
+  recipes: unknown[],
+  run: (session: AgentSession, dir: string) => Promise<void>,
+  policyRules: unknown[] = [],
+  extensionSource?: string,
+) {
   const dir = await mkdtemp(join(tmpdir(), "pi-hooks-recipes-"));
   const previous = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = dir;
   try {
-    await writeFile(join(dir, "pi-hooks.jsonc"), JSON.stringify({ schemaVersion: 2, audit: { path: join(dir, "audit.jsonl"), includeAllows: true }, providers: [
-      { id: "action-engine", required: false, config: { recipes } }, { id: "policy-engine", config: { rules: policyRules } },
-    ] }));
-    const loader = new DefaultResourceLoader({ cwd: dir, agentDir: dir, additionalExtensionPaths: [entry], noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true });
+    const providers = [
+      { id: "action-engine", required: false, config: { recipes } },
+      ...(extensionSource === undefined ? [] : [{ id: "host-transform" }]),
+      { id: "policy-engine", config: { rules: policyRules } },
+    ];
+    await writeFile(join(dir, "pi-hooks.jsonc"), JSON.stringify({ schemaVersion: 2, audit: { path: join(dir, "audit.jsonl"), includeAllows: true }, providers }));
+    const extensionPath = extensionSource === undefined ? entry : join(dir, "recipe-extension.ts");
+    if (extensionSource !== undefined) await writeFile(extensionPath, extensionSource);
+    const loader = new DefaultResourceLoader({ cwd: dir, agentDir: dir, additionalExtensionPaths: [extensionPath], noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true });
     await loader.reload();
     expect(loader.getExtensions().errors).toEqual([]);
     const { session } = await createAgentSession({ cwd: dir, resourceLoader: loader, sessionManager: SessionManager.inMemory() });
@@ -91,6 +102,65 @@ describe("Action Engine via the real Pi loader", () => {
     });
   });
 
+  it.each([
+    ["context before block", [{ type: "add-context", text: "must not leak" }, { type: "block", reason: "ask the owner" }]],
+    ["block before context", [{ type: "block", reason: "ask the owner" }, { type: "add-context", text: "must not leak" }]],
+  ])("discards same-Recipe context when %s", async (_label, effects) => {
+    await withRecipes([
+      recipe("blocker", "tool_call", `console.log(${JSON.stringify(JSON.stringify(effects))})`, { effects: ["add-context", "block"] }),
+    ], async (session, dir) => {
+      const runner = session.extensionRunner!;
+      expect(await runner.emitToolCall(call)).toMatchObject({ block: true, reason: "Recipe blocker: ask the owner" });
+      expect(await runner.emitContext([])).toEqual([]);
+      const audit = (await readFile(join(dir, "audit.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+      expect(audit).toContainEqual(expect.objectContaining({ moduleId: "recipe:blocker", provider: "action-engine", decision: "deny" }));
+    });
+  });
+
+  it("discards earlier Recipe context when a later Recipe denies the call", async () => {
+    await withRecipes([
+      recipe("context-first", "tool_call", `console.log(JSON.stringify({type:'add-context',text:'must not leak'}))`, { effects: ["add-context"] }),
+      recipe("block-later", "tool_call", `console.log(JSON.stringify({type:'block',reason:'later denial'}))`, { effects: ["block"] }),
+    ], async (session) => {
+      const runner = session.extensionRunner!;
+      expect(await runner.emitToolCall(call)).toMatchObject({ block: true, reason: "Recipe block-later: later denial" });
+      expect(await runner.emitContext([])).toEqual([]);
+    });
+  });
+
+  it("discards Recipe context when final policy denies transformed input", async () => {
+    await withRecipes([
+      recipe("context-first", "tool_call", `console.log(JSON.stringify({type:'add-context',text:'must not leak'}))`, { effects: ["add-context"] }),
+    ], async (session) => {
+      const runner = session.extensionRunner!;
+      expect(await runner.emitToolCall(call)).toMatchObject({ block: true, reason: expect.stringContaining("deny-transformed") });
+      expect(await runner.emitContext([])).toEqual([]);
+    }, [{ id: "deny-transformed", match: { input: { command: { equals: "denied after transform" } } }, decision: "hard-deny", scope: "test", remedy: "use safe input" }], transformedPolicyExtension());
+  });
+
+  it("keeps pre-existing and overlapping allowed-call context, then drains it once", async () => {
+    const readInput = "let s='';process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const input=JSON.parse(s).input;";
+    await withRecipes([
+      recipe("pre-existing", "input", `console.log(JSON.stringify({type:'add-context',text:'pre-existing'}))`, { effects: ["add-context"] }),
+      recipe("per-call-context", "tool_call", `${readInput}setTimeout(()=>console.log(JSON.stringify({type:'add-context',text:'context '+input.command})),input.command==='allowed'?30:5)})`, { effects: ["add-context"] }),
+      recipe("conditional-block", "tool_call", `${readInput}if(input.command==='denied')console.log(JSON.stringify({type:'block',reason:'denied call'}))})`, { effects: ["block"] }),
+    ], async (session) => {
+      const runner = session.extensionRunner!;
+      await runner.emitInput("hello", undefined, "interactive");
+      const [denied, allowed] = await Promise.all([
+        runner.emitToolCall({ ...call, toolCallId: "denied", input: { command: "denied" } }),
+        runner.emitToolCall({ ...call, toolCallId: "allowed", input: { command: "allowed" } }),
+      ]);
+      expect(denied).toMatchObject({ block: true, reason: "Recipe conditional-block: denied call" });
+      expect(allowed).toBeUndefined();
+      const firstContext = JSON.stringify(await runner.emitContext([]));
+      expect(firstContext).toContain("pre-existing");
+      expect(firstContext).toContain("context allowed");
+      expect(firstContext).not.toContain("context denied");
+      expect(await runner.emitContext([])).toEqual([]);
+    });
+  });
+
   it("applies declared block, context, and result effects through Pi", async () => {
     await withRecipes([
       recipe("blocker", "tool_call", `console.log(JSON.stringify({type:'block',reason:'ask the owner'}))`, { tool: "bash", effects: ["block"] }),
@@ -144,6 +214,24 @@ describe("Action Engine via the real Pi loader", () => {
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 });
+
+function transformedPolicyExtension(): string {
+  return `
+import { actionEngineProvider, createPiHooksExtension, defineProvider, policyEngineProvider } from ${JSON.stringify(hooksIndexPath)};
+
+const hostTransform = defineProvider({
+  manifest: { id: "host-transform", version: "1.0.0", grants: ["events"] },
+  activate(facade) {
+    facade.events.registerModule({
+      id: "host-transform",
+      tool_call: { transform: () => ({ input: { command: "denied after transform" } }) },
+    });
+  },
+});
+
+export default createPiHooksExtension({ providers: [actionEngineProvider, hostTransform, policyEngineProvider] });
+`;
+}
 
 describe("Recipe child lifecycle", () => {
   it("reports spawn errors and cancellation", async () => {

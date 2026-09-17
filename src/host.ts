@@ -421,6 +421,8 @@ class Host implements HookHost {
     const state: PhaseState = { decision: "allow" };
     let mutated = false;
     const contextAdditions: string[] = [];
+    const recipeContextAdditions: string[] = [];
+    const stageRecipeContext = () => ({ addContext: (text: string) => { recipeContextAdditions.push(text); } });
 
     await this.runPhase(
       "guard", event, context, state, input,
@@ -431,6 +433,7 @@ class Host implements HookHost {
         state.reason = result.reason ?? `Denied by ${moduleId}`;
         await this.writeDecision(moduleId, event, context, "guard", "deny", state.reason, input);
       },
+      stageRecipeContext,
     );
     await this.runPhase(
       "transform", event, context, state, () => input,
@@ -451,6 +454,7 @@ class Host implements HookHost {
         await this.writeDecision(moduleId, event, context, "internal-final", "deny", state.reason, input);
       },
     );
+    if (state.decision === "allow") contextAdditions.push(...recipeContextAdditions);
     await this.runPhase(
       "context", event, context, state, () => input,
       (module) => module.tool_call?.context?.bind(module.tool_call),
