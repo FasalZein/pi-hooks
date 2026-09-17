@@ -40,7 +40,8 @@ describe("bundled pi-lsp go/no-go", () => {
         expect(fromLsp.resolve(dependency)).toContain(dir);
         console.log(`Bundled dependency: ${dependency} -> ${fromLsp.resolve(dependency)}`);
       }
-      await writeFile(join(dir, "settings.json"), JSON.stringify({ packages: [packageDir], lsp: { servers: { typescript: {
+      await writeFile(join(dir, "settings.json"), JSON.stringify({ packages: [packageDir] }));
+      await writeFile(join(dir, "pi-hooks.jsonc"), "// unified configuration\n" + JSON.stringify({ schemaVersion: 2, lsp: { servers: { typescript: {
         command: "tsgo", args: ["--lsp", "--stdio"], languages: [{ extensions: [".ts"], languageId: "typescript" }], rootMarkers: ["tsconfig.json"], requireRootMarker: true,
       } } } }));
       await writeFile(join(dir, "tsconfig.json"), JSON.stringify({ compilerOptions: { strict: true, noEmit: true }, include: ["example.ts"] }));
@@ -63,6 +64,28 @@ describe("bundled pi-lsp go/no-go", () => {
         const edit = await callTool(session, "edit", { path: file, edits: [{ oldText: "42", newText: '"another error"' }] });
         expect(JSON.stringify(edit.content)).toContain("not assignable");
         expect(await readFile(file, "utf8")).toContain('"another error"');
+        const runner = session.extensionRunner!;
+        const lspCommand = runner.getCommand("lsp")!;
+        await lspCommand.handler("disable typescript --global", runner.createContext() as never);
+        const disabled = await readFile(join(dir, "pi-hooks.jsonc"), "utf8");
+        expect(disabled).toContain("// unified configuration");
+        expect(disabled).toContain('"typescript": false');
+        expect(JSON.parse(await readFile(join(dir, "settings.json"), "utf8"))).not.toHaveProperty("lsp");
+        expect(JSON.stringify((await callTool(session, "lsp", { operation: "status" })).content)).toContain("disabled");
+        await lspCommand.handler("enable typescript --global", runner.createContext() as never);
+        await lspCommand.handler("disable typescript", runner.createContext() as never);
+        expect(JSON.stringify((await callTool(session, "lsp", { operation: "status" })).content)).toContain("disabled");
+        expect(await readFile(join(dir, "pi-hooks.jsonc"), "utf8")).toContain('"typescript": true');
+        await runner.emit({ type: "session_shutdown", reason: "quit" });
+        const fresh = await createAgentSession({ cwd: dir, resourceLoader: loader, sessionManager: SessionManager.inMemory() });
+        try {
+          await fresh.session.bindExtensions({});
+          expect(fresh.session.getAllTools().filter((tool) => tool.name === "lsp")).toHaveLength(1);
+          expect(JSON.stringify((await callTool(fresh.session, "lsp", { operation: "diagnostics", file_path: file })).content)).toContain("not assignable");
+        } finally {
+          await fresh.session.extensionRunner!.emit({ type: "session_shutdown", reason: "quit" });
+          fresh.session.dispose();
+        }
       } finally {
         await session.extensionRunner!.emit({ type: "session_shutdown", reason: "quit" });
         session.dispose();

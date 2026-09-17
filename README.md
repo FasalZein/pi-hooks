@@ -18,9 +18,13 @@ Code imports of the package root receive the Bare Host default instead. The Pres
 
 ### Bundled language server
 
-The manifest also loads `@ian-pascoe/pi-lsp` 0.4.4 and its skill from this package's dependencies. The LSP extension keeps its own lifecycle outside Host grants. Do not also load a standalone `pi-lsp` extension: both register the same `lsp` tool and command.
+The manifest also loads `@ian-pascoe/pi-lsp` 0.4.4 through the checked settings adapter, plus its skill from this package's dependencies. The LSP extension keeps its own lifecycle outside Host grants. Do not also load a standalone `pi-lsp` extension: both register the same `lsp` tool and command.
 
-LSP configuration stays under `lsp` in Pi settings. A language server executable must be available for each configured language. Verification currently requires `tsgo` on PATH for the real TypeScript diagnostics test.
+LSP configuration lives under `lsp` in `pi-hooks.jsonc`. Pi settings are not a fallback. Add server definitions by name and set `enabled: false` to disable one. Server executables must already be installed; no catalog or installer runs automatically. Verification requires `tsgo` on PATH for the real TypeScript diagnostics test.
+
+`/lsp disable <server> --global` updates only that server's enablement in `pi-hooks.jsonc`, preserving comments and unrelated fields. Without `--global`, toggles apply to the current session. Project-scoped writes are refused with a remedy. Project Pi settings cannot inject executable LSP definitions.
+
+The dependency patch changes only optional settings reader/writer effects. `npm run prepare:lsp` checks the exact upstream version and source checksum before applying it. Install and packaging scripts run this check; `npm run verify` also runs it. Packed releases already contain the checked patch, including when installed with scripts disabled. Upgrading LSP requires updating the checked patch and rerunning the live tests.
 
 ## Configuration
 
@@ -29,24 +33,26 @@ Create trusted global JSONC configuration at `~/.pi/agent/pi-hooks.jsonc` (or `$
 ```jsonc
 {
   "schemaVersion": 2,
-  "providers": [
-    { "id": "my-provider", "enabled": true }
+  // Omitted rules keep all Preset defaults.
+  "rules": [
+    { "id": "danger-01", "enabled": false }
   ],
-  "modules": []
+  "recipes": [],
+  "lsp": { "servers": {} }
 }
 ```
 
 `schemaVersion` can be `1` or `2`. The Host converts version `1` to `2` in memory without rewriting the file. The editor schema is [`schema/pi-hooks.global.schema.json`](schema/pi-hooks.global.schema.json).
 
-The default export is a Bare Host with no Providers. Missing configuration is a valid empty configuration. Invalid configuration creates an Inactive Host. Both pass Pi events through unchanged. A required component activation failure makes the complete Host inactive before any staged registrations reach Pi. An optional component failure isolates that component and degrades runtime health.
+The library default export is a Bare Host with no Providers. Missing configuration is valid; the installed Preset supplies its defaults. Invalid configuration creates an Inactive Host. Both pass Pi events through unchanged. A required component activation failure makes the complete Host inactive before any staged registrations reach Pi. An optional component failure isolates that component and degrades runtime health.
 
-Policy requires an explicit composition with the named `policyEngineProvider` export and authorization in the configuration. Configuration does not load Provider implementations from disk.
+Library users select policy through an explicit composition with the named `policyEngineProvider` export. The installed Preset already selects it. Configuration does not load Provider implementations from disk.
 
 Use `/hooks status` for activation, configuration health, runtime health, audit health, Providers and their grants, phase order, and the observed boundary.
 
 ### Dangerous-command rules
 
-[`examples/dangerous-commands.json`](examples/dangerous-commands.json) contains the 28 migrated ask rules. Copy its Provider entry into trusted global configuration. It does not import old settings automatically.
+[`examples/dangerous-commands.json`](examples/dangerous-commands.json) contains the 28 migrated ask rules. These 28 rules are already included in the Preset, alongside the additional named rules in `src/default-rules.json`. The example does not import old settings automatically.
 
 `glob` matches the complete command, ignores case, and treats only `*` as a wildcard. An array of glob patterns matches any member. It is not a shell parser or a sandbox. Approval applies once to the exact input. A Host transform requires fresh approval if that input changes. Without a UI, ask rules deny with a remedy.
 
@@ -88,7 +94,7 @@ Recipes must declare permitted effects. Unsupported, undeclared, wrong-event, an
 
 Approvals show the exact command, rule id, scope, and remedy. The only choices are Deny and Allow once. Deny is selected initially. A denial also creates a styled, model-invisible transcript entry beside Pi's unchanged tool error.
 
-Set `"rendering": false` in global `pi-hooks.jsonc` for JSON status, Pi's plain confirmation dialog, and plain denial output. This toggle never changes policy or audit outcomes. Reload Pi after configuration changes.
+Set `"rendering": false` in global `pi-hooks.jsonc` for JSON status, Pi's plain confirmation dialog, and plain denial output. This toggle never changes policy or audit outcomes. Reload Pi after configuration changes. See [`examples/pi-hooks.jsonc`](examples/pi-hooks.jsonc) for a commented configuration.
 
 ## Native events
 

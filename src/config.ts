@@ -101,7 +101,7 @@ export async function loadGlobalConfig(path: string): Promise<GlobalConfig> {
 
 export function parseGlobalConfig(text: string): GlobalConfig {
   const parseErrors: ParseError[] = [];
-  const value = parse(text, parseErrors, { allowTrailingComma: true, disallowComments: false });
+  const value = parse(text.replace(/^\uFEFF/, ""), parseErrors, { allowTrailingComma: true, disallowComments: false });
   if (parseErrors.length > 0) {
     throw new Error(`Invalid JSONC: ${parseErrors.map((error) => printParseErrorCode(error.error)).join(", ")}`);
   }

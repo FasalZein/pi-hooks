@@ -12,7 +12,8 @@
     "src",
     "schema",
     "examples",
-    "README.md"
+    "README.md",
+    "scripts"
   ],
   "keywords": [
     "pi-package",
@@ -24,19 +25,27 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src test",
-    "verify": "npm run typecheck && npm run lint && npm test"
+    "verify": "npm run prepare:lsp && npm run typecheck && npm run lint && npm test",
+    "prepare:lsp": "node scripts/patch-lsp.mjs",
+    "postinstall": "npm run prepare:lsp",
+    "prepack": "npm run prepare:lsp"
   },
   "pi": {
     "extensions": [
       "./src/preset.ts",
-      "./node_modules/@ian-pascoe/pi-lsp/src/index.ts"
+      "./src/lsp.ts"
     ],
-    "skills": ["./node_modules/@ian-pascoe/pi-lsp/skills"]
+    "skills": [
+      "./node_modules/@ian-pascoe/pi-lsp/skills"
+    ]
   },
-  "bundledDependencies": ["@ian-pascoe/pi-lsp"],
+  "bundledDependencies": [
+    "@ian-pascoe/pi-lsp"
+  ],
   "dependencies": {
     "@ian-pascoe/pi-lsp": "0.4.4",
     "jsonc-parser": "3.3.1",
+    "proper-lockfile": "4.1.2",
     "typebox": "1.1.38"
   },
   "peerDependencies": {
@@ -46,9 +55,13 @@
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.85.1",
     "@types/node": "24.12.0",
+    "@types/proper-lockfile": "4.1.4",
     "eslint": "10.7.0",
     "typescript": "5.9.3",
     "typescript-eslint": "8.64.0",
     "vitest": "4.0.18"
-  }
+  },
+  "bundleDependencies": [
+    "@ian-pascoe/pi-lsp"
+  ]
 }

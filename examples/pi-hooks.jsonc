@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 2,
+  // UI only. Turning this off never changes a policy decision.
+  "rendering": true,
+  // Omitted ids keep the 42 built-in ask rules. Use enabled:false to disable one.
+  "rules": [
+    { "id": "danger-sudo", "remedy": "Run without sudo or approve this exact command once." }
+  ],
+  // Scripts are opt-in. Each Recipe requires literal argv and timeoutMs.
+  "recipes": [],
+  "lsp": {
+    "servers": {
+      // Example only: tsgo must already be available on PATH. No automatic install.
+      "typescript": {
+        "enabled": true,
+        "command": "tsgo",
+        "args": ["--lsp", "--stdio"],
+        "languages": [{ "extensions": [".ts", ".tsx"], "languageId": "typescript" }],
+        "rootMarkers": ["tsconfig.json", "package.json"],
+        "requireRootMarker": true
+      }
+    }
+  }
+}

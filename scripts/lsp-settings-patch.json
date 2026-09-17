@@ -1,0 +1,28 @@
+{
+  "version": "0.4.4",
+  "originalSha256": "741e02974125adb22534e17cb1490a857e7655d530ef720d339a3f126f166eb4",
+  "patchedSha256": "1acd9f08fba9011d8771e0af9ee844700bf1b373cb947fc3efe2998ed14c7f74",
+  "replacements": [
+    [
+      "  getAgentDirectory(): string;",
+      "  getAgentDirectory(): string;\n  /** pi-hooks optional adapter, defaults retain upstream behavior. */\n  readSettings?(context: ExtensionContext): LspSettingsReader | Promise<LspSettingsReader>;\n  writeEnablement?: typeof writeLspEnablement;"
+    ],
+    [
+      "import { resolveLspSettings, type LspServerEnablement }",
+      "import { resolveLspSettings, type LspServerEnablement, type LspSettingsReader }"
+    ],
+    [
+      "    const settingsManager = SettingsManager.create(context.cwd, this.effects.getAgentDirectory(), {\n      projectTrusted: context.isProjectTrusted(),\n    });",
+      "    const settingsManager = this.effects.readSettings\n      ? await this.effects.readSettings(context)\n      : SettingsManager.create(context.cwd, this.effects.getAgentDirectory(), {\n        projectTrusted: context.isProjectTrusted(),\n      });"
+    ],
+    [
+      "        await writeLspEnablement({",
+      "        await (this.effects.writeEnablement ?? writeLspEnablement)({"
+    ],
+    [
+      "          SettingsManager.create(session.cwd, this.effects.getAgentDirectory(), {\n            projectTrusted: context.isProjectTrusted(),\n          }),",
+      "          this.effects.readSettings\n            ? await this.effects.readSettings(context)\n            : SettingsManager.create(session.cwd, this.effects.getAgentDirectory(), {\n              projectTrusted: context.isProjectTrusted(),\n            }),"
+    ]
+  ],
+  "suffix": "\n/** Checked by pi-hooks before loading the settings adapter. */\nexport const PI_HOOKS_SETTINGS_API = 1;\n"
+}
