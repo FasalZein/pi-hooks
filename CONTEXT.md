@@ -64,7 +64,7 @@ An explicit composition of the Hook Host with selected Providers and configurati
 _Avoid_: bundle, distribution, profile
 
 **Bundled Extension**:
-A third-party Pi extension shipped inside this package as a dependency and loaded by Pi's own loader through a manifest path. It runs outside the Host and holds no Grant Families. `pi-lsp` is a Bundled Extension.
+A third-party Pi extension shipped inside this package as a dependency and loaded by Pi's own loader through a manifest path. Its settings adapter uses the checked dependency patch in ADR-0003. It runs outside the Host and holds no Grant Families. `pi-lsp` is a Bundled Extension.
 _Avoid_: vendored extension, embedded extension, LSP Engine
 
 **Cutover**:
