@@ -5,20 +5,26 @@ import { applyEdits, modify } from 'jsonc-parser';
 import { lockSync } from 'proper-lockfile';
 import { loadGlobalConfig, parseGlobalConfig } from './config.js';
 
+type AdaptedServerDefinition = { server: unknown; enabled?: boolean };
+
+function adaptServerDefinition(definition: Record<string, unknown> | null, override: boolean | undefined): AdaptedServerDefinition | undefined {
+  if (definition === null) return undefined;
+  const { enabled, ...server } = definition;
+  if (enabled !== undefined && typeof enabled !== 'boolean') return { server: definition };
+  if (enabled === undefined || override !== undefined) return { server };
+  return { server, enabled };
+}
+
 export async function readLspConfiguration(path: string) {
   const config = await loadGlobalConfig(path);
   const definitions = config.lsp?.servers ?? {};
   const servers: Record<string, unknown> = {};
   const enablement = { ...config.lsp?.enablement };
   for (const [id, definition] of Object.entries(definitions)) {
-    if (definition === null) continue;
-    const { enabled, ...server } = definition;
-    if (enabled !== undefined && typeof enabled !== 'boolean') {
-      servers[id] = definition;
-      continue;
-    }
-    if (enabled !== undefined && enablement[id] === undefined) enablement[id] = enabled;
-    servers[id] = server;
+    const adapted = adaptServerDefinition(definition, enablement[id]);
+    if (adapted === undefined) continue;
+    servers[id] = adapted.server;
+    if (adapted.enabled !== undefined) enablement[id] = adapted.enabled;
   }
   return {
     getGlobalSettings: () => ({ lsp: { ...config.lsp, servers, enablement } }),

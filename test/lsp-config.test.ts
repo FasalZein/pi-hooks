@@ -27,6 +27,7 @@ describe('one authoritative LSP configuration', () => {
     await writeFile(path, JSON.stringify({ schemaVersion: 2, lsp: { servers: {
       broken: { enabled: 'sometimes', command: 'broken', languages: [{ extensions: ['.broken'], languageId: 'broken' }] },
       healthy: { enabled: true, command: 'healthy', languages: [{ extensions: ['.ts'], languageId: 'typescript' }] },
+      removed: null,
     } } }));
     const reader = await readLspConfiguration(path);
     expect(reader.getGlobalSettings()).toMatchObject({ lsp: {
@@ -36,6 +37,7 @@ describe('one authoritative LSP configuration', () => {
       },
       enablement: { healthy: true },
     } });
+    expect(reader.getGlobalSettings().lsp.servers).not.toHaveProperty('removed');
   }));
 
   it('preserves comments, unrelated fields, permissions, symlinks, and repeated updates', async () => withFile(async (path, dir) => {
