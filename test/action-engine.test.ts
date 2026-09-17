@@ -264,11 +264,13 @@ describe("Recipe child lifecycle", () => {
     "aborts an active Pi turn Recipe child with onFailure %s",
     async (onFailure) => {
       const timeoutMs = 5000;
+      let fixtureDir: string | undefined;
+      let pids: { leader: number; descendant: number } | undefined;
       await withRecipes([
         recipe("active-cancel", "tool_call", activeProcessTreeScript("active-process.json"), { timeoutMs, onFailure }),
       ], async (session, dir) => {
+        fixtureDir = dir;
         const run = runActiveToolTurn(session);
-        let pids: { leader: number; descendant: number } | undefined;
         try {
           pids = await readJsonWhenReady(join(dir, "active-process.json"), timeoutMs);
           expect(session.isIdle).toBe(false);
@@ -320,6 +322,10 @@ describe("Recipe child lifecycle", () => {
           if (pids) cleanupProcesses(pids);
         }
       });
+      if (!fixtureDir || !pids) throw new Error("active Recipe process handshake was not observed");
+      expect(isProcessAlive(pids.leader)).toBe(false);
+      expect(isProcessAlive(pids.descendant)).toBe(false);
+      await expect(readFile(fixtureDir)).rejects.toMatchObject({ code: "ENOENT" });
     },
     30_000,
   );
