@@ -163,6 +163,31 @@ describe("SLICE-0011 item 2: rule matching and allow/deny composition", () => {
     });
   }, 30_000);
 
+  it("requires every configured input matcher to match", async () => {
+    const config = policyConfig([
+      {
+        id: "exact-command-and-mode",
+        match: {
+          tool: "bash",
+          input: {
+            command: { equals: "echo safe" },
+            mode: { equals: "restricted" },
+          },
+        },
+        decision: "deny",
+        scope: "combined input",
+        remedy: "change the complete input",
+      },
+    ]);
+    await withPolicySession({ config, extensionSource: bundledSource }, async (session) => {
+      const partialMatch = await emitToolCall(session, "bash", { command: "echo different", mode: "restricted" });
+      expect(partialMatch?.block ?? false).toBe(false);
+
+      const completeMatch = await emitToolCall(session, "bash", { command: "echo safe", mode: "restricted" });
+      expect(completeMatch).toMatchObject({ block: true, reason: expect.stringContaining("exact-command-and-mode") });
+    });
+  }, 30_000);
+
   it("deny beats allow, and an explicit allow-only match does not block", async () => {
     const config = policyConfig([
       { id: "allow-bash", match: { tool: "bash" }, decision: "allow", scope: "shell", remedy: "n/a" },
