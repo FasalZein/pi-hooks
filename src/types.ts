@@ -43,6 +43,7 @@ export interface NormalizedEvent {
 export interface DispatchContext {
   cwd: string;
   hasUI: boolean;
+  mode?: string;
   signal?: AbortSignal;
   sessionManager?: {
     getSessionFile?(): string | undefined;

@@ -50,7 +50,7 @@ export function statusPanel(status: HostStatus, theme: Theme, done: () => void, 
 }
 
 export async function showStatus(status: HostStatus, ctx: ExtensionCommandContext): Promise<void> {
-  if (!status.rendering || !ctx.hasUI || !ctx.ui.custom) {
+  if (!status.rendering || !ctx.hasUI || ctx.mode === "rpc" || !ctx.ui.custom) {
     ctx.ui.notify(JSON.stringify(status), "info");
     return;
   }

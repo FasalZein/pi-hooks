@@ -55,6 +55,7 @@ export interface PiGrantBindings {
 export interface HookHost {
   dispatch(event: NormalizedEvent, context: DispatchContext): Promise<DispatchResult>;
   status(): HostStatus;
+  recordPresentationFailure(reason: string): Promise<void>;
   /** Flush provider grant registrations that require the real Pi surface. */
   bindPi(bindings: PiGrantBindings): void;
 }
@@ -141,7 +142,7 @@ function createInteractionBroker(rendering: boolean): InteractionBroker {
     },
     async confirm(request, options) {
       const ui = current?.hasUI ? current.ui : undefined;
-      if (rendering && ui?.custom) return (await confirmApproval(ui, request)) ? "approved" : "denied";
+      if (rendering && current?.mode !== "rpc" && ui?.custom) return (await confirmApproval(ui, request)) ? "approved" : "denied";
       if (!ui?.confirm) return options.noUiOutcome;
       return (await ui.confirm(request.title, request.message)) ? "approved" : "denied";
     },
@@ -293,6 +294,11 @@ class Host implements HookHost {
       if (op.kind === "status") context.ui.setStatus(op.key, op.text);
       else context.ui.setWidget?.(op.key, op.lines);
     }
+  }
+
+  async recordPresentationFailure(reason: string): Promise<void> {
+    this.runtimeFailure = `Hooks TUI: ${reason}`;
+    await this.audit.record({ timestamp: new Date().toISOString(), moduleId: "host", eventType: "tool_call", phase: "host", decision: "module-failure", reason: this.runtimeFailure });
   }
 
   async recordInactive(reason: string): Promise<void> {

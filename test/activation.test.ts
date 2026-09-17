@@ -129,6 +129,19 @@ describe("ADR-001 activation at the real Pi boundary", () => {
     });
   });
 
+  it("keeps a denied call blocked when denial rendering cannot append an entry", async () => {
+    const config = JSON.stringify({ schemaVersion: 2, modules: [{ id: "deny" }] });
+    const source = `import { createPiHooksExtension } from ${JSON.stringify(entry)};
+      export default async (pi) => {
+        pi.appendEntry = () => { throw new Error("presentation unavailable"); };
+        await createPiHooksExtension({ modules: [{ id: "deny", tool_call: { guard: () => ({ decision: "deny", reason: "must stay blocked" }) } }] })(pi);
+      };`;
+    await withSession(config, source, async (session) => {
+      await session.bindExtensions({ uiContext: { notify() {}, setStatus() {} } as never });
+      expect(await session.extensionRunner!.emitToolCall({ type: "tool_call", toolName: "bash", toolCallId: "blocked", input: { command: "echo denied" } })).toMatchObject({ block: true, reason: "must stay blocked" });
+    });
+  });
+
   it("reports unreadable configuration separately from a missing file", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-hooks-unreadable-"));
     try {

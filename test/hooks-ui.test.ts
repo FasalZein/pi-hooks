@@ -6,7 +6,7 @@ import { createAgentSession, DefaultResourceLoader, SessionManager, type Extensi
 import { visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { approvalPanel, denialPanel, statusPanel, statusText } from "../src/hooks-ui.js";
-import { createHookHost } from "../src/index.js";
+import { createHookHost, policyEngineProvider, normalizeEvent } from "../src/index.js";
 
 const theme = { fg: (_color: string, text: string) => text } as Theme;
 const request = { title: "Policy Engine approval", message: "Command: rm file\nRule: danger-01\nScope: deletion\nRemedy: use read" };
@@ -102,6 +102,21 @@ describe("Hooks TUI", () => {
       }
     }
     expect(outcomes[0]).toEqual(outcomes[1]);
+  });
+
+  it("uses the native dialog rather than terminal components in RPC mode", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-hooks-rpc-"));
+    try {
+      const configPath = join(dir, "pi-hooks.jsonc");
+      await writeFile(configPath, JSON.stringify({ schemaVersion: 2, providers: [{ id: "policy-engine", config: { rules: [{ id: "ask", match: { tool: "bash" }, decision: "ask", scope: "shell", remedy: "approve once" }] } }] }));
+      const host = await createHookHost({ configPath, preset: "pi-hooks", providers: [policyEngineProvider] });
+      const custom = vi.fn(async () => { throw new Error("terminal UI unavailable in RPC"); });
+      const confirm = vi.fn(async () => true);
+      const result = await host.dispatch(normalizeEvent("tool_call", { toolName: "bash", toolCallId: "rpc", input: { command: "echo ok" } }), { cwd: dir, mode: "rpc", hasUI: true, ui: { setStatus() {}, confirm, custom: custom as never } });
+      expect(result.decision).toBe("allow");
+      expect(confirm).toHaveBeenCalledOnce();
+      expect(custom).not.toHaveBeenCalled();
+    } finally { await rm(dir, { recursive: true, force: true }); }
   });
 
   it("renders a Recipe denial without changing its model-visible reason", () => {

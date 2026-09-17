@@ -46,7 +46,11 @@ export function createPiHooksExtension(options: CreateHookHostOptions = {}) {
       if (result.mutated) replaceInput(event.input as Record<string, unknown>, result.input);
       if (result.decision === "deny") {
         if (ctx.hasUI && host.status().rendering) {
-          pi.appendEntry("pi-hooks-denial", { reason: result.reason ?? "Denied by a Hook Module" });
+          try {
+            pi.appendEntry("pi-hooks-denial", { reason: result.reason ?? "Denied by a Hook Module" });
+          } catch (error) {
+            await host.recordPresentationFailure(error instanceof Error ? error.message : String(error));
+          }
         }
         return { block: true, reason: result.reason };
       }
