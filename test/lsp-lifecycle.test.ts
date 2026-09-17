@@ -316,23 +316,33 @@ describe("Pi LSP lifecycle proof", () => {
     await writeFile(runner, `
       import { existsSync } from "node:fs";
       const { createAgentSession, DefaultResourceLoader, SessionManager } = await import(${JSON.stringify(sdkUrl)});
-      const [cwd, packageRoot, marker] = process.argv.slice(2);
+      const [cwd, packageRoot, marker, file] = process.argv.slice(2);
       process.env.PI_CODING_AGENT_DIR = cwd;
       const loader = new DefaultResourceLoader({ cwd, agentDir: cwd, noExtensions: true, additionalExtensionPaths: [packageRoot], noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true });
-      await loader.reload();
-      const { session } = await createAgentSession({ cwd, resourceLoader: loader, sessionManager: SessionManager.inMemory(cwd), tools: ["lsp"] });
-      await session.bindExtensions({});
-      console.log(JSON.stringify({
-        errors: loader.getExtensions().errors,
-        activeTools: session.getActiveToolNames(),
-        lspTools: session.getAllTools().filter((tool) => tool.name === "lsp").length,
-        commands: ["hooks", "lsp", "project-command"].filter((name) => session.extensionRunner.getCommand(name)),
-        projectImported: existsSync(marker),
-      }));
-      await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
-      session.dispose();
+      let session;
+      try {
+        await loader.reload();
+        ({ session } = await createAgentSession({ cwd, resourceLoader: loader, sessionManager: SessionManager.inMemory(cwd), tools: ["lsp"] }));
+        await session.bindExtensions({});
+        const tool = session.getToolDefinition("lsp");
+        const input = tool.prepareArguments?.({ operation: "diagnostics", file_path: file }) ?? { operation: "diagnostics", file_path: file };
+        const diagnostic = await tool.execute("fresh-process", input, undefined, undefined, session.extensionRunner.createContext());
+        console.log(JSON.stringify({
+          errors: loader.getExtensions().errors,
+          activeTools: session.getActiveToolNames(),
+          lspTools: session.getAllTools().filter((candidate) => candidate.name === "lsp").length,
+          commands: ["hooks", "lsp", "project-command"].filter((name) => session.extensionRunner.getCommand(name)),
+          projectImported: existsSync(marker),
+          diagnostic: JSON.stringify(diagnostic.content),
+        }));
+      } finally {
+        if (session) {
+          await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+          session.dispose();
+        }
+      }
     `);
-    const { stdout } = await exec(process.execPath, [runner, profile.dir, root, marker], { cwd: root, timeout: 20_000 });
+    const { stdout } = await exec(process.execPath, [runner, profile.dir, root, marker, profile.file], { cwd: root, timeout: 20_000 });
     const result = JSON.parse(stdout.trim());
     expect(result).toEqual({
       errors: [],
@@ -340,6 +350,7 @@ describe("Pi LSP lifecycle proof", () => {
       lspTools: 1,
       commands: ["hooks", "lsp"],
       projectImported: false,
+      diagnostic: expect.stringContaining("definition-fresh"),
     });
   });
 });
