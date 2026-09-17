@@ -244,22 +244,27 @@ function validateProviderConfig(schema: TSchema | undefined, config: unknown): s
     const id = namedEntryAtPath(config, path);
     return `${id ? `entry ${id} ` : ""}${path}: ${error.message}`;
   });
-  return errors.join("; ") || "does not match provider config schema";
+  return providerConfigFailure(errors);
+}
+
+function providerConfigFailure(errors: string[]): string {
+  const failure = errors.join("; ");
+  return failure === "" ? "does not match provider config schema" : failure;
+}
+
+function namedEntryId(value: unknown): string | undefined {
+  const id = Reflect.get(Object(value), "id");
+  if (typeof id === "string") return id;
+  return undefined;
 }
 
 function namedEntryAtPath(config: unknown, path: string): string | undefined {
   let current = config;
-  let id: string | undefined;
+  let id = namedEntryId(current);
   for (const part of path.split("/").slice(1)) {
-    if (current && typeof current === "object" && typeof (current as { id?: unknown }).id === "string") {
-      id = (current as { id: string }).id;
-    }
-    if (!current || typeof current !== "object") break;
     const key = part.replaceAll("~1", "/").replaceAll("~0", "~");
-    current = (current as Record<string, unknown>)[key];
-  }
-  if (current && typeof current === "object" && typeof (current as { id?: unknown }).id === "string") {
-    id = (current as { id: string }).id;
+    current = Reflect.get(Object(current), key);
+    id = namedEntryId(current) ?? id;
   }
   return id;
 }
